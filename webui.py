@@ -157,9 +157,9 @@ def is_ffmpeg_available():
 
 def save_video(frames, save_path, fps=30, quality=5, progress_desc="Saving video..."):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    frames_np = (frames.cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
     with imageio.get_writer(save_path, fps=fps, quality=quality, macro_block_size=1) as writer:
-        for frame_np in tqdm(frames_np, desc=f"[FlashVSR] {progress_desc}"):
+        for i in tqdm(range(frames.shape[0]), desc=f"[FlashVSR] {progress_desc}"):
+            frame_np = (frames[i].cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
             writer.append_data(frame_np)
 
 def prepare_tensors(path: str, dtype=torch.bfloat16):
@@ -534,6 +534,9 @@ def run_flashvsr_integrated(
                 del LQ_tile, output_tile_gpu, processed_tile_cpu, input_tile; clean_vram()
             weight_sum_canvas[weight_sum_canvas == 0] = 1.0
             final_output_tensor = final_output_canvas / weight_sum_canvas
+            # Free the large canvas tensors immediately
+            del final_output_canvas, weight_sum_canvas
+            clean_vram()
     else: # Non-tiled mode
         progress(0.1, desc="Initializing model pipeline...")
         pipe = init_pipeline(mode, _device, dtype)
@@ -557,10 +560,17 @@ def run_flashvsr_integrated(
             final_output_tensor = tensor2video(video).cpu()
             # Trim to match input frame count
             final_output_tensor = final_output_tensor[:frames.shape[0]]
+            del video  # Free the original video tensor
         del pipe; clean_vram()
 
     if final_output_tensor is not None:
         progress(0.9, desc="Saving final video...")
+        # Aggressive cleanup before saving to minimize RAM usage
+        del frames  # Free input frames
+        clean_vram()
+        torch.cuda.empty_cache()
+        import gc
+        gc.collect()
         save_video(final_output_tensor, temp_video_path, fps=_fps, quality=quality)
 
     # Always save to temp directory first (persists during session)
@@ -732,8 +742,16 @@ def create_ui():
                                 scale_slider = gr.Slider(minimum=2, maximum=4, step=1, value=2, label="Upscale Factor", info="Designed to upscale small/short AI video. Start with x2...")
                                 tiled_dit_checkbox = gr.Checkbox(label="Enable Tiled DiT", info="Greatly reduces VRAM at the cost of speed.", value=True)
                             with gr.Row(visible=True) as tiled_dit_options:
-                                tile_size_slider = gr.Slider(minimum=64, maximum=512, step=16, value=256, label="Tile Size")
-                                tile_overlap_slider = gr.Slider(minimum=8, maximum=128, step=8, value=24, label="Tile Overlap")
+                                tile_size_slider = gr.Slider(
+                                    minimum=64, maximum=512, step=16, value=256, 
+                                    label="Tile Size", 
+                                    info="Smaller = less VRAM (128 uses ~half the VRAM of 256), but more tiles to process"
+                                )
+                                tile_overlap_slider = gr.Slider(
+                                    minimum=8, maximum=128, step=8, value=24, 
+                                    label="Tile Overlap", 
+                                    info="Higher = smoother tile blending, but slower. Must be less than half of tile size"
+                                )
                                 
                     # --- Right-side Column ---      
                     with gr.Column(scale=1):
