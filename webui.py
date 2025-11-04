@@ -173,7 +173,8 @@ def prepare_tensors(path: str, dtype=torch.bfloat16):
         with imageio.get_reader(path) as rdr:
             meta = rdr.get_meta_data()
             fps = meta.get('fps', 30)
-            frames = [torch.from_numpy(frame_data.astype(np.float32) / 255.0).to(dtype) for frame_data in tqdm(rdr, desc="Loading video frames")]
+            # Explicitly convert to numpy array to avoid NumPy 2.0 deprecation warning
+            frames = [torch.from_numpy(np.asarray(frame_data, dtype=np.float32) / 255.0).to(dtype) for frame_data in tqdm(rdr, desc="Loading video frames")]
         return torch.stack(frames, 0), fps
     raise ValueError(f"Unsupported input: {path}")
 
