@@ -992,6 +992,630 @@ def resize_input_video(video_path, max_width, progress=gr.Progress()):
         log(traceback.format_exc(), message_type="error")
         return video_path
 
+def get_video_duration(video_path):
+    """Get video duration in seconds. Returns 0 on error."""
+    try:
+        if not video_path or not os.path.exists(video_path):
+            return 0
+        reader = imageio.get_reader(video_path)
+        meta = reader.get_meta_data()
+        duration = meta.get('duration', 0)
+        reader.close()
+        return duration
+    except:
+        return 0
+
+def get_video_fps(video_path):
+    """Get video FPS. Returns 30 as default on error."""
+    try:
+        if not video_path or not os.path.exists(video_path):
+            return 30
+        reader = imageio.get_reader(video_path)
+        meta = reader.get_meta_data()
+        fps = meta.get('fps', 30)
+        reader.close()
+        return fps
+    except:
+        return 30
+
+def get_minimum_duration(video_path):
+    """Calculate minimum duration needed for FlashVSR (21 frames minimum)."""
+    fps = get_video_fps(video_path)
+    min_frames = 21
+    min_duration = min_frames / fps
+    return min_duration
+
+def format_time_mmss(seconds):
+    """Format seconds as MM:SS for display."""
+    if seconds == 0:
+        return "00:00"
+    minutes = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{minutes:02d}:{secs:02d}"
+
+def preview_trim(video_path, start_time, end_time):
+    """Generate preview text showing what trim operation will do."""
+    if not video_path:
+        return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">No video loaded</div>'
+    
+    total_duration = get_video_duration(video_path)
+    if total_duration == 0:
+        return '<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404; font-size: 0.9em; text-align: center;">⚠️ Could not read video duration</div>'
+    
+    min_duration = get_minimum_duration(video_path)
+    
+    # Clamp values
+    start_time = max(0, min(start_time, total_duration))
+    end_time = max(start_time, min(end_time, total_duration))
+    
+    if end_time == 0:
+        end_time = total_duration
+    
+    # Validate range
+    if end_time <= start_time:
+        return '<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24; font-size: 0.9em; text-align: center;">❌ End time must be after start time</div>'
+    
+    trim_duration = end_time - start_time
+    
+    # Check minimum duration (21 frames required by FlashVSR)
+    if trim_duration < min_duration:
+        fps = get_video_fps(video_path)
+        return f'<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24; font-size: 0.9em; text-align: center;">❌ Trimmed video too short! Need at least {min_duration:.2f}s (21 frames @ {fps:.1f} FPS)</div>'
+    
+    # Simple trim mode
+    if start_time == 0 and end_time >= total_duration:
+        return f'<div style="padding: 8px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.9em; text-align: center;">Processing full video ({total_duration:.1f}s) ✓</div>'
+    else:
+        return f'<div style="padding: 8px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; color: #155724; font-size: 0.9em; text-align: center;">Will trim: {start_time:.1f}s → {end_time:.1f}s ({trim_duration:.1f}s) ✓</div>'
+
+def preview_chunk(video_path, start_time, end_time, chunk_duration):
+    """Generate preview text showing what chunk operation will do."""
+    if not video_path:
+        return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">No video loaded</div>'
+    
+    total_duration = get_video_duration(video_path)
+    if total_duration == 0:
+        return '<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404; font-size: 0.9em; text-align: center;">⚠️ Could not read video duration</div>'
+    
+    # Clamp values
+    start_time = max(0, min(start_time, total_duration))
+    end_time = max(start_time, min(end_time, total_duration))
+    
+    if end_time == 0:
+        end_time = total_duration
+    
+    # Validate range
+    if end_time <= start_time:
+        return '<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24; font-size: 0.9em; text-align: center;">❌ End time must be after start time</div>'
+    
+    trim_duration = end_time - start_time
+    
+    # Validate chunk duration
+    if chunk_duration <= 0:
+        return '<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24; font-size: 0.9em; text-align: center;">❌ Chunk duration must be greater than 0</div>'
+    
+    num_chunks = math.ceil(trim_duration / chunk_duration)
+    avg_chunk_size = trim_duration / num_chunks
+    
+    return f'''<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404; font-size: 0.9em; text-align: center;">
+        Will create {num_chunks} chunk(s) of ~{avg_chunk_size:.1f}s each<br>
+        Range: {start_time:.1f}s → {end_time:.1f}s ({trim_duration:.1f}s total)<br>
+        <span style="color: #856404;">⚠️ Combined output may have visible seams due to color correction</span>
+    </div>'''
+
+def preview_chunk_processing(video_path, chunk_duration):
+    """Generate preview showing how many chunks will be created."""
+    if not video_path:
+        return '<div style="padding: 6px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">💡 Enable chunk processing for videos that exceed your available VRAM</div>'
+    
+    duration = get_video_duration(video_path)
+    if duration == 0:
+        return '<div style="padding: 6px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404; font-size: 0.85em; text-align: center;">⚠️ Could not read video duration</div>'
+    
+    min_duration = get_minimum_duration(video_path)
+    
+    # Check if chunk duration is too short
+    if chunk_duration < min_duration:
+        fps = get_video_fps(video_path)
+        return f'<div style="padding: 6px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24; font-size: 0.85em; text-align: center;">❌ Chunk duration too short! Need at least {min_duration:.2f}s (21 frames @ {fps:.1f} FPS)</div>'
+    
+    num_chunks = math.ceil(duration / chunk_duration)
+    avg_chunk_size = duration / num_chunks
+    
+    # # Estimate processing time (very rough - 2-4 min per 10s chunk)
+    # est_time_per_chunk = 3  # minutes (average)
+    # est_total_time = num_chunks * est_time_per_chunk
+    
+    # time_str = ""
+    # if est_total_time < 60:
+        # time_str = f"~{est_total_time:.0f} min"
+    # else:
+        # hours = est_total_time // 60
+        # mins = est_total_time % 60
+        # time_str = f"~{hours:.0f}h {mins:.0f}m"
+    
+    return f'''<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404; font-size: 0.85em; text-align: center;">
+        📊 Will create <strong>{num_chunks} chunks</strong> of ~{avg_chunk_size:.1f}s each<br>
+        Video: {format_time_mmss(duration)} ({duration:.1f}s) <br>
+    </div>'''
+
+
+def trim_video(video_path, start_time, end_time, progress=gr.Progress()):
+    """Trim video to specified time range using FFmpeg."""
+    if not video_path or not os.path.exists(video_path):
+        log("No video provided for trim", message_type="warning")
+        return video_path
+    
+    if not is_ffmpeg_available():
+        log("FFmpeg not available, cannot trim video", message_type="error")
+        return video_path
+    
+    total_duration = get_video_duration(video_path)
+    start_time = max(0, min(start_time, total_duration))
+    end_time = max(start_time, min(end_time, total_duration))
+    
+    if end_time == 0:
+        end_time = total_duration
+    
+    # Validate that end_time is after start_time
+    if end_time <= start_time:
+        log(f"Invalid trim range: end time ({end_time:.1f}s) must be after start time ({start_time:.1f}s)", message_type="error")
+        return video_path
+    
+    # If no actual trimming needed, return original
+    if start_time == 0 and end_time >= total_duration:
+        log("No trimming needed - using full video", message_type="info")
+        return video_path
+    
+    try:
+        log(f"Trimming video from {start_time:.1f}s to {end_time:.1f}s...", message_type="info")
+        progress(0.1, desc="Trimming video...")
+        
+        input_basename = os.path.splitext(os.path.basename(video_path))[0]
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        output_filename = f"{input_basename}_trim_{start_time:.0f}-{end_time:.0f}s_{timestamp}.mp4"
+        output_path = os.path.join(TEMP_DIR, output_filename)
+        
+        duration = end_time - start_time
+        
+        # Build FFmpeg command for fast, accurate trimming
+        ffmpeg_cmd = [
+            'ffmpeg', '-y',
+            '-ss', str(start_time),  # Seek to start
+            '-i', video_path,
+            '-t', str(duration),  # Duration to extract
+            '-c:v', 'libx264',
+            '-preset', 'medium',
+            '-crf', '18',
+            '-pix_fmt', 'yuv420p',
+            '-map', '0:v:0',
+            '-map', '0:a:0?',
+            '-c:a', 'aac',
+            '-b:a', '192k',
+            output_path
+        ]
+        
+        progress(0.3, desc="Running FFmpeg trim...")
+        
+        result = subprocess.run(
+            ffmpeg_cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        progress(1.0, desc="Trim complete!")
+        log(f"Video trimmed successfully: {output_path}", message_type="finish")
+        return output_path
+        
+    except subprocess.CalledProcessError as e:
+        log(f"FFmpeg error during trim: {e}", message_type="error")
+        if e.stderr:
+            log("FFmpeg stderr:", message_type="error")
+            for line in e.stderr.split('\n')[-10:]:  # Last 10 lines
+                if line.strip():
+                    log(f"  {line}", message_type="error")
+        return video_path
+    except Exception as e:
+        log(f"Error trimming video: {e}", message_type="error")
+        return video_path
+
+def create_video_chunks_with_overlap(video_path, start_time, end_time, chunk_duration, overlap, progress=gr.Progress()):
+    """Split video into overlapping chunks for better context. Returns list of (chunk_path, trim_start, trim_end) tuples."""
+    if not video_path or not os.path.exists(video_path):
+        log("No video provided for chunking", message_type="warning")
+        return []
+    
+    if not is_ffmpeg_available():
+        log("FFmpeg not available, cannot create chunks", message_type="error")
+        return []
+    
+    total_duration = get_video_duration(video_path)
+    min_duration = get_minimum_duration(video_path)
+    fps = get_video_fps(video_path)
+    
+    start_time = max(0, min(start_time, total_duration))
+    end_time = max(start_time, min(end_time, total_duration))
+    
+    if end_time == 0:
+        end_time = total_duration
+    
+    # Validate range
+    if end_time <= start_time:
+        log(f"Invalid chunk range: end time ({end_time:.1f}s) must be after start time ({start_time:.1f}s)", message_type="error")
+        return []
+    
+    # Validate chunk duration
+    if chunk_duration <= 0:
+        log(f"Invalid chunk duration: must be greater than 0", message_type="error")
+        return []
+    
+    # Check if chunk duration is too short
+    if chunk_duration < min_duration:
+        log(f"Chunk duration too short: {chunk_duration:.2f}s. FlashVSR requires at least {min_duration:.2f}s (21 frames @ {fps:.1f} FPS)", message_type="error")
+        return []
+    
+    trim_duration = end_time - start_time
+    
+    # Calculate chunks with overlap
+    chunk_paths = []
+    input_basename = os.path.splitext(os.path.basename(video_path))[0]
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    
+    chunk_start = start_time
+    chunk_index = 0
+    
+    while chunk_start < end_time:
+        chunk_index += 1
+        
+        # Add overlap at the start (except for first chunk)
+        actual_start = max(start_time, chunk_start - overlap) if chunk_index > 1 else chunk_start
+        
+        # Calculate end of this chunk
+        chunk_end = min(chunk_start + chunk_duration, end_time)
+        
+        # Add overlap at the end (except for last chunk)
+        actual_end = min(end_time, chunk_end + overlap) if chunk_end < end_time else chunk_end
+        
+        chunk_dur = actual_end - actual_start
+        
+        progress((chunk_index / (trim_duration / chunk_duration)) * 0.8, desc=f"Creating chunk {chunk_index}...")
+        
+        output_filename = f"{input_basename}_chunk{chunk_index:03d}_{timestamp}.mp4"
+        output_path = os.path.join(TEMP_DIR, output_filename)
+        
+        try:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-ss', str(actual_start),
+                '-i', video_path,
+                '-t', str(chunk_dur),
+                '-c:v', 'libx264',
+                '-preset', 'medium',
+                '-crf', '18',
+                '-pix_fmt', 'yuv420p',
+                '-map', '0:v:0',
+                '-map', '0:a:0?',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                output_path
+            ]
+            
+            result = subprocess.run(
+                ffmpeg_cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            # Store chunk path with trim info (how much to trim from start/end after processing)
+            trim_start_offset = overlap if chunk_index > 1 else 0
+            trim_end_offset = overlap if chunk_end < end_time else 0
+            
+            chunk_paths.append((output_path, trim_start_offset, trim_end_offset))
+            log(f"Created chunk {chunk_index}: {actual_start:.1f}s-{actual_end:.1f}s (will trim {trim_start_offset:.2f}s from start, {trim_end_offset:.2f}s from end)", message_type="info")
+            
+        except subprocess.CalledProcessError as e:
+            log(f"Error creating chunk {chunk_index}: {e}", message_type="error")
+            continue
+        
+        # Move to next chunk (without overlap for positioning)
+        chunk_start = chunk_end
+    
+    progress(1.0, desc=f"Created {len(chunk_paths)} chunks!")
+    log(f"Successfully created {len(chunk_paths)} overlapping chunks", message_type="finish")
+    return chunk_paths
+
+def create_video_chunks(video_path, start_time, end_time, chunk_duration, progress=gr.Progress()):
+    """Split video into chunks and return list of chunk paths."""
+    if not video_path or not os.path.exists(video_path):
+        log("No video provided for chunking", message_type="warning")
+        return []
+    
+    if not is_ffmpeg_available():
+        log("FFmpeg not available, cannot create chunks", message_type="error")
+        return []
+    
+    total_duration = get_video_duration(video_path)
+    start_time = max(0, min(start_time, total_duration))
+    end_time = max(start_time, min(end_time, total_duration))
+    
+    if end_time == 0:
+        end_time = total_duration
+    
+    # Validate range
+    if end_time <= start_time:
+        log(f"Invalid chunk range: end time ({end_time:.1f}s) must be after start time ({start_time:.1f}s)", message_type="error")
+        return []
+    
+    # Validate chunk duration
+    if chunk_duration <= 0:
+        log(f"Invalid chunk duration: must be greater than 0", message_type="error")
+        return []
+    
+    trim_duration = end_time - start_time
+    num_chunks = math.ceil(trim_duration / chunk_duration)
+    
+    log(f"Creating {num_chunks} chunks of ~{chunk_duration}s each...", message_type="info")
+    
+    chunk_paths = []
+    input_basename = os.path.splitext(os.path.basename(video_path))[0]
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    
+    for i in range(num_chunks):
+        chunk_start = start_time + (i * chunk_duration)
+        chunk_end = min(chunk_start + chunk_duration, end_time)
+        chunk_dur = chunk_end - chunk_start
+        
+        progress((i / num_chunks) * 0.8, desc=f"Creating chunk {i+1}/{num_chunks}...")
+        
+        output_filename = f"{input_basename}_chunk{i+1:03d}_{timestamp}.mp4"
+        output_path = os.path.join(TEMP_DIR, output_filename)
+        
+        try:
+            ffmpeg_cmd = [
+                'ffmpeg', '-y',
+                '-ss', str(chunk_start),
+                '-i', video_path,
+                '-t', str(chunk_dur),
+                '-c:v', 'libx264',
+                '-preset', 'medium',
+                '-crf', '18',
+                '-pix_fmt', 'yuv420p',
+                '-map', '0:v:0',
+                '-map', '0:a:0?',
+                '-c:a', 'aac',
+                '-b:a', '192k',
+                output_path
+            ]
+            
+            result = subprocess.run(
+                ffmpeg_cmd,
+                capture_output=True,
+                text=True,
+                check=True
+            )
+            
+            chunk_paths.append(output_path)
+            log(f"Created chunk {i+1}/{num_chunks}: {chunk_start:.1f}s-{chunk_end:.1f}s", message_type="info")
+            
+        except subprocess.CalledProcessError as e:
+            log(f"Error creating chunk {i+1}: {e}", message_type="error")
+            continue
+    
+    progress(1.0, desc=f"Created {len(chunk_paths)} chunks!")
+    log(f"Successfully created {len(chunk_paths)} chunks", message_type="finish")
+    return chunk_paths
+
+def combine_video_chunks(chunk_paths, output_name_base, progress=gr.Progress()):
+    """Combine processed video chunks into a single video."""
+    if not chunk_paths:
+        log("No chunks to combine", message_type="warning")
+        return None
+    
+    if not is_ffmpeg_available():
+        log("FFmpeg not available, cannot combine chunks", message_type="error")
+        return None
+    
+    log(f"Combining {len(chunk_paths)} chunks...", message_type="info")
+    progress(0.1, desc="Preparing to combine chunks...")
+    
+    try:
+        # Create a temporary file list for FFmpeg concat
+        timestamp = time.strftime("%Y%m%d_%H%M%S")
+        concat_list_path = os.path.join(TEMP_DIR, f"concat_list_{timestamp}.txt")
+        
+        with open(concat_list_path, 'w') as f:
+            for chunk_path in chunk_paths:
+                # FFmpeg concat requires absolute paths with proper escaping
+                abs_path = os.path.abspath(chunk_path).replace('\\', '/')
+                f.write(f"file '{abs_path}'\n")
+        
+        output_filename = f"{output_name_base}_combined_{timestamp}.mp4"
+        output_path = os.path.join(TEMP_DIR, output_filename)
+        
+        progress(0.3, desc="Running FFmpeg concat...")
+        
+        # Use concat demuxer for fast, lossless concatenation
+        ffmpeg_cmd = [
+            'ffmpeg', '-y',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', concat_list_path,
+            '-c', 'copy',  # Copy streams without re-encoding
+            output_path
+        ]
+        
+        result = subprocess.run(
+            ffmpeg_cmd,
+            capture_output=True,
+            text=True,
+            check=True
+        )
+        
+        # Clean up concat list file
+        try:
+            os.remove(concat_list_path)
+        except:
+            pass
+        
+        progress(1.0, desc="Chunks combined!")
+        log(f"Successfully combined chunks: {output_path}", message_type="finish")
+        return output_path
+        
+    except subprocess.CalledProcessError as e:
+        log(f"FFmpeg error during combine: {e}", message_type="error")
+        if e.stderr:
+            log("FFmpeg stderr:", message_type="error")
+            for line in e.stderr.split('\n')[-10:]:
+                if line.strip():
+                    log(f"  {line}", message_type="error")
+        return None
+    except Exception as e:
+        log(f"Error combining chunks: {e}", message_type="error")
+        return None
+
+def process_video_with_chunks(
+    input_path, chunk_duration, mode, scale, color_fix, tiled_vae, tiled_dit,
+    tile_size, tile_overlap, unload_dit, dtype_str, seed, device, fps_override,
+    quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave,
+    progress=gr.Progress()
+):
+    """
+    Process video in chunks automatically - creates chunks, processes each, and combines.
+    This is a wrapper around the main processing function for chunk mode.
+    """
+    if not input_path or not os.path.exists(input_path):
+        log("No input video provided for chunk processing", message_type="error")
+        return None, None, None
+    
+    # Generate seed once for all chunks to ensure consistency
+    if seed == -1:
+        seed = random.randint(0, 2**32 - 1)
+        log(f"Generated seed for chunk processing: {seed}", message_type="info")
+    
+    # Step 1: Create chunks
+    log(f"Starting chunk processing mode with {chunk_duration}s chunks...", message_type="info")
+    progress(0.05, desc="Creating video chunks...")
+    
+    total_duration = get_video_duration(input_path)
+    chunk_paths = create_video_chunks(input_path, 0, 0, chunk_duration, progress)
+    
+    if not chunk_paths:
+        log("Failed to create chunks", message_type="error")
+        return None, None, None
+    
+    num_chunks = len(chunk_paths)
+    log(f"Created {num_chunks} chunks, processing each...", message_type="info")
+    
+    # Step 2: Process each chunk (model reloaded each time for clean state)
+    processed_chunks = []
+    input_basename = os.path.splitext(os.path.basename(input_path))[0]
+    
+    for i, chunk_path in enumerate(chunk_paths):
+        chunk_progress_start = 0.1 + (i / num_chunks) * 0.8
+        
+        log(f"Processing chunk {i+1}/{num_chunks}...", message_type="info")
+        progress(chunk_progress_start, desc=f"Processing chunk {i+1}/{num_chunks}...")
+        
+        try:
+            # Process this chunk using the main processing function
+            # Seed is already fixed at the start, so all chunks use the same seed
+            output_path, _, _ = run_flashvsr_single(
+                input_path=chunk_path,
+                mode=mode,
+                scale=scale,
+                color_fix=color_fix,
+                tiled_vae=tiled_vae,
+                tiled_dit=tiled_dit,
+                tile_size=tile_size,
+                tile_overlap=tile_overlap,
+                unload_dit=unload_dit,
+                dtype_str=dtype_str,
+                seed=seed,  # Use the fixed seed for all chunks
+                device=device,
+                fps_override=fps_override,
+                quality=quality,
+                attention_mode=attention_mode,
+                sparse_ratio=sparse_ratio,
+                kv_ratio=kv_ratio,
+                local_range=local_range,
+                autosave=False,
+                progress=gr.Progress()
+            )
+            
+            if output_path and os.path.exists(output_path):
+                processed_chunks.append(output_path)
+                log(f"✅ Chunk {i+1}/{num_chunks} processed successfully", message_type="finish")
+            else:
+                log(f"❌ Failed to process chunk {i+1}/{num_chunks}", message_type="error")
+                
+        except Exception as e:
+            log(f"Error processing chunk {i+1}/{num_chunks}: {e}", message_type="error")
+            continue
+    
+    # Clean up unprocessed chunks
+    for chunk_path in chunk_paths:
+        try:
+            if os.path.exists(chunk_path):
+                os.remove(chunk_path)
+        except:
+            pass
+    
+    if not processed_chunks:
+        log("No chunks were successfully processed", message_type="error")
+        return None, None, None
+    
+    if len(processed_chunks) < num_chunks:
+        log(f"Warning: Only {len(processed_chunks)}/{num_chunks} chunks processed successfully", message_type="warning")
+    
+    # Step 3: Combine processed chunks
+    progress(0.9, desc="Combining processed chunks...")
+    log("Combining all processed chunks into final video...", message_type="info")
+    
+    combined_path = combine_video_chunks(processed_chunks, f"{input_basename}_{mode}_s{scale}", progress)
+    
+    if not combined_path:
+        log("Failed to combine chunks", message_type="error")
+        # Return first chunk as fallback
+        return processed_chunks[0] if processed_chunks else None, processed_chunks[0] if processed_chunks else None, None
+    
+    # Clean up individual processed chunks
+    for chunk_path in processed_chunks:
+        try:
+            if os.path.exists(chunk_path):
+                os.remove(chunk_path)
+        except:
+            pass
+    
+    # Step 4: Handle audio and final output
+    timestamp = time.strftime("%Y%m%d-%H%M%S")
+    output_filename = f"{input_basename}_{mode}_s{scale}_chunked_{timestamp}.mp4"
+    temp_output_path = os.path.join(TEMP_DIR, output_filename)
+    
+    # Merge audio from original video
+    if is_video(input_path):
+        progress(0.95, desc="Merging audio...")
+        merge_video_with_audio(combined_path, input_path, temp_output_path)
+    else:
+        shutil.move(combined_path, temp_output_path)
+    
+    # Autosave if enabled
+    if autosave:
+        final_save_path = os.path.join(OUTPUT_DIR, output_filename)
+        shutil.copy(temp_output_path, final_save_path)
+        log(f"Chunk processing complete! Auto-saved to: {final_save_path}", message_type="finish")
+    else:
+        log(f"Chunk processing complete! Use 'Save Output' to save to outputs folder.", message_type="finish")
+    
+    progress(1.0, desc="Done!")
+    
+    return (
+        temp_output_path,
+        temp_output_path,
+        (input_path, temp_output_path)
+    )
+
 def open_folder(folder_path):
     try:
         if sys.platform == "win32":
@@ -1146,28 +1770,58 @@ def create_ui():
                             
                             gr.Markdown("---")
                             
-                            # Resize controls
-                            gr.Markdown("**Resize & Re-encode Input Video**")
+                            # Trim controls in sub-accordion
+                            with gr.Accordion("✂️ Trim Video", open=False):
+                                gr.Markdown('<span style="font-size: 0.9em; color: #666;">Extract a specific time range from your video</span>')
+                                
+                                with gr.Row():
+                                    trim_start_slider = gr.Slider(
+                                        minimum=0,
+                                        maximum=60,
+                                        step=0.5,
+                                        value=0,
+                                        label="Start Time (seconds)",
+                                        info="Where to start"
+                                    )
+                                    
+                                    trim_end_slider = gr.Slider(
+                                        minimum=0,
+                                        maximum=60,
+                                        step=0.5,
+                                        value=0,
+                                        label="End Time (seconds)",
+                                        info="Where to stop (0 = end of video)"
+                                    )
+                                trim_preview_html = gr.HTML(
+                                    value='<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload video to see trim preview</div>'
+                                )
+                                
+                                trim_button = gr.Button("✂️ Apply Trim", size="sm", variant="primary")
                             
-                            resize_max_width_slider = gr.Slider(
-                                minimum=256,
-                                maximum=2048,
-                                step=64,
-                                value=768,
-                                label="Target Width (pixels)",
-                                info="Adjust slider to resize video. Maximum is set to your video's current width.",
-                                interactive=True
-                            )
+                            # Resize controls in sub-accordion
+                            with gr.Accordion("📐 Resize Video", open=False):
+                                gr.Markdown('<span style="font-size: 0.9em; color: #666;">Reduce resolution to save VRAM and processing time</span>')
+                                
+                                resize_max_width_slider = gr.Slider(
+                                    minimum=256,
+                                    maximum=2048,
+                                    step=64,
+                                    value=768,
+                                    label="Target Width (pixels)",
+                                    info="Video will be resized maintaining aspect ratio",
+                                    interactive=True
+                                )
+                                
+                                resize_preview_html = gr.HTML(
+                                    value='<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload and analyze video to enable resize</div>'
+                                )
+                                
+                                resize_button = gr.Button("📐 Apply Resize", size="sm", variant="primary")
                             
-                            resize_preview_html = gr.HTML(
-                                value='<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload and analyze video to enable resize</div>'
-                            )
-                            
-                            resize_button = gr.Button("Apply Resize", size="sm", variant="primary")
-                            
-                            # Hidden state to store current video dimensions
+                            # Hidden state to store current video dimensions and duration
                             current_video_width = gr.State(0)
                             current_video_height = gr.State(0)
+                            current_video_duration = gr.State(0)
 
                                 
                         with gr.Group():
@@ -1189,7 +1843,27 @@ def create_ui():
                                     label="Tile Overlap", 
                                     info="Higher = smoother tile blending, but slower. Must be less than half of tile size"
                                 )
-                                
+                            # Chunk processing mode
+                            with gr.Row():
+                                enable_chunk_processing = gr.Checkbox(
+                                    label="Process as Chunks (Low VRAM Mode)",
+                                    value=False,
+                                    info="Automatically split, process, and combine video in chunks to reduce memory usage"
+                                )
+                            with gr.Row(visible=False) as chunk_settings_row:
+                                chunk_duration_slider = gr.Slider(
+                                    minimum=3,
+                                    maximum=30,
+                                    step=1,
+                                    value=10,
+                                    label="Chunk Duration (seconds)",
+                                    info="Shorter = less VRAM, more chunks. Longer = fewer seams, more VRAM"
+                                )
+                            chunk_preview_display = gr.HTML(
+                                value='<div style="padding: 6px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">💡 Enable chunk processing for videos that exceed your available VRAM</div>',
+                                visible=False
+                            )
+                                    
                     # --- Right-side Column ---      
                     with gr.Column(scale=1):
                         with gr.Tabs() as flashvsr_output_tab:
@@ -1552,27 +2226,51 @@ def create_ui():
         # Analyze video button handler - updates slider max and preview
         def handle_analyze(video_path):
             html, width, height = analyze_input_video(video_path)
+            duration = get_video_duration(video_path)
             
-            # Update slider maximum to video width (or keep 2048 if video is larger)
+            # Update resize slider maximum to video width (or keep 2048 if video is larger)
             slider_max = min(width, 2048) if width > 0 else 2048
             slider_value = min(768, slider_max)  # Default to 768 or lower if video is smaller
             
-            # Update slider
-            slider_update = gr.update(
+            # Update resize slider
+            resize_slider_update = gr.update(
                 maximum=slider_max,
                 value=slider_value,
                 interactive=(width > 0)
             )
             
-            # Update preview
-            preview = preview_resize(video_path, slider_value)
+            # Update trim sliders based on duration
+            trim_start_update = gr.update(
+                maximum=duration if duration > 0 else 60,
+                value=0,
+                interactive=(duration > 0)
+            )
+            trim_end_update = gr.update(
+                maximum=duration if duration > 0 else 60,
+                value=0,  # 0 means "end of video"
+                interactive=(duration > 0)
+            )
             
-            return html, width, height, slider_update, preview
+            # Update previews
+            resize_preview = preview_resize(video_path, slider_value)
+            trim_preview = preview_trim(video_path, 0, 0)
+            
+            return html, width, height, duration, resize_slider_update, resize_preview, trim_start_update, trim_end_update, trim_preview
         
         analyze_video_btn.click(
             fn=handle_analyze,
             inputs=[input_video],
-            outputs=[video_analysis_html, current_video_width, current_video_height, resize_max_width_slider, resize_preview_html]
+            outputs=[
+                video_analysis_html, 
+                current_video_width, 
+                current_video_height, 
+                current_video_duration,
+                resize_max_width_slider, 
+                resize_preview_html,
+                trim_start_slider,
+                trim_end_slider,
+                trim_preview_html
+            ]
         )
         
         # Update preview when slider changes
@@ -1585,54 +2283,170 @@ def create_ui():
             outputs=[resize_preview_html]
         )
         
-        # When video changes, auto-analyze it
-        def handle_video_change(video_path):
+       # When video changes, auto-analyze it and update chunk preview
+        def handle_video_change(video_path, chunk_duration):
             if not video_path:
                 return (
                     '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload video to see analysis</div>',
                     0,
                     0,
+                    0,
                     gr.update(maximum=2048, value=768, interactive=False),
-                    '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload video to enable resize</div>'
+                    '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload video to enable resize</div>',
+                    gr.update(maximum=60, value=0, interactive=False),
+                    gr.update(maximum=60, value=0, interactive=False),
+                    gr.update(maximum=60, value=0, interactive=False),
+                    gr.update(maximum=60, value=0, interactive=False),
+                    '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload video to enable trim</div>',
+                    '<div style="padding: 6px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">💡 Enable chunk processing for videos that exceed your available VRAM</div>'
                 )
+                
             # Auto-analyze the video
-            return handle_analyze(video_path)
+            analysis_results = handle_analyze(video_path)
+            # Update chunk preview
+            chunk_preview = preview_chunk_processing(video_path, chunk_duration)
+            return analysis_results + (chunk_preview,)
         
         input_video.change(
             fn=handle_video_change,
-            inputs=[input_video],
-            outputs=[video_analysis_html, current_video_width, current_video_height, resize_max_width_slider, resize_preview_html]
+            inputs=[input_video, chunk_duration_slider],
+            outputs=[
+                video_analysis_html, 
+                current_video_width, 
+                current_video_height, 
+                current_video_duration,
+                resize_max_width_slider, 
+                resize_preview_html,
+                trim_start_slider,
+                trim_end_slider,
+                trim_preview_html,
+                chunk_preview_display
+            ]
         )
         
+        # Update trim preview when parameters change
+        def update_trim_preview(video_path, start_time, end_time):
+            return preview_trim(video_path, start_time, end_time)
+        
+        trim_start_slider.change(
+            fn=update_trim_preview,
+            inputs=[input_video, trim_start_slider, trim_end_slider],
+            outputs=[trim_preview_html]
+        )
+        
+        trim_end_slider.change(
+            fn=update_trim_preview,
+            inputs=[input_video, trim_start_slider, trim_end_slider],
+            outputs=[trim_preview_html]
+        )
+        
+        # Apply trim button handler
+        def handle_trim_only(video_path, start_time, end_time, progress=gr.Progress()):
+            if not video_path:
+                return video_path, gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update(), gr.update()
+            
+            trimmed_path = trim_video(video_path, start_time, end_time, progress)
+            
+            # Re-analyze the trimmed video
+            html, width, height = analyze_input_video(trimmed_path)
+            duration = get_video_duration(trimmed_path)
+            
+            resize_slider_update = gr.update(maximum=min(width, 2048) if width > 0 else 2048, value=min(768, min(width, 2048) if width > 0 else 2048))
+            resize_preview = preview_resize(trimmed_path, min(768, min(width, 2048) if width > 0 else 2048))
+            
+            trim_start_update = gr.update(maximum=duration if duration > 0 else 60, value=0)
+            trim_end_update = gr.update(maximum=duration if duration > 0 else 60, value=0)
+            trim_preview = preview_trim(trimmed_path, 0, 0)
+            
+            return trimmed_path, html, duration, resize_slider_update, resize_preview, trim_start_update, trim_end_update, trim_preview
+        
+        trim_button.click(
+            fn=handle_trim_only,
+            inputs=[input_video, trim_start_slider, trim_end_slider],
+            outputs=[input_video, video_analysis_html, current_video_duration, resize_max_width_slider, resize_preview_html, trim_start_slider, trim_end_slider, trim_preview_html]
+        )
+
         # Apply resize button handler
         def handle_resize_and_update(video_path, max_width, progress=gr.Progress()):
             resized_path = resize_input_video(video_path, max_width, progress)
             
-            # After resize, analyze the new video to update slider
+            # After resize, analyze the new video to update sliders
             html, width, height = analyze_input_video(resized_path)
-            slider_max = min(width, 2048) if width > 0 else 2048
-            slider_value = min(max_width, slider_max)
+            duration = get_video_duration(resized_path)
             
-            slider_update = gr.update(maximum=slider_max, value=slider_value)
-            preview = preview_resize(resized_path, slider_value)
+            resize_slider_max = min(width, 2048) if width > 0 else 2048
+            resize_slider_value = min(max_width, resize_slider_max)
             
-            return resized_path, html, slider_update, preview
+            resize_slider_update = gr.update(maximum=resize_slider_max, value=resize_slider_value)
+            resize_preview = preview_resize(resized_path, resize_slider_value)
+            
+            trim_start_update = gr.update(maximum=duration if duration > 0 else 60, value=0)
+            trim_end_update = gr.update(maximum=duration if duration > 0 else 60, value=0)
+            trim_preview = preview_trim(resized_path, 0, 0)
+            
+            return resized_path, html, duration, resize_slider_update, resize_preview, trim_start_update, trim_end_update, trim_preview
         
         resize_button.click(
             fn=handle_resize_and_update,
             inputs=[input_video, resize_max_width_slider],
-            outputs=[input_video, video_analysis_html, resize_max_width_slider, resize_preview_html]
+            outputs=[input_video, video_analysis_html, current_video_duration, resize_max_width_slider, resize_preview_html, trim_start_slider, trim_end_slider, trim_preview_html]
         )
         
+        # Main processing handler - routes to chunk or normal processing
+        def handle_processing(
+            input_path, enable_chunks, chunk_duration, mode, scale, color_fix, tiled_vae,
+            tiled_dit, tile_size, tile_overlap, unload_dit, dtype_str, seed, device,
+            fps_override, quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave
+        ):
+            if enable_chunks:
+                # Use chunk processing mode
+                return process_video_with_chunks(
+                    input_path, chunk_duration, mode, scale, color_fix, tiled_vae, tiled_dit,
+                    tile_size, tile_overlap, unload_dit, dtype_str, seed, device, fps_override,
+                    quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave
+                )
+            else:
+                # Use normal processing
+                return run_flashvsr_single(
+                    input_path, mode, scale, color_fix, tiled_vae, tiled_dit, tile_size,
+                    tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
+                    attention_mode, sparse_ratio, kv_ratio, local_range, autosave
+                )
+        
         run_button.click(
-            fn=run_flashvsr_single,
+            fn=handle_processing,
             inputs=[
-                input_video, mode_radio, scale_slider, color_fix_checkbox, tiled_vae_checkbox,
+                input_video, enable_chunk_processing, chunk_duration_slider,
+                mode_radio, scale_slider, color_fix_checkbox, tiled_vae_checkbox,
                 tiled_dit_checkbox, tile_size_slider, tile_overlap_slider, unload_dit_checkbox,
                 dtype_radio, seed_number, device_textbox, fps_number, quality_slider, attention_mode_radio,
                 sparse_ratio_slider, kv_ratio_slider, local_range_slider, autosave_checkbox
             ],
             outputs=[video_output, output_file_path, video_slider_output]
+        )
+        
+        # Toggle chunk settings visibility and update preview
+        def toggle_chunk_settings(enable_chunks, video_path, chunk_duration):
+            if enable_chunks:
+                preview = preview_chunk_processing(video_path, chunk_duration)
+                return gr.update(visible=True), gr.update(visible=True, value=preview)
+            else:
+                return gr.update(visible=False), gr.update(visible=False)
+        
+        enable_chunk_processing.change(
+            fn=toggle_chunk_settings,
+            inputs=[enable_chunk_processing, input_video, chunk_duration_slider],
+            outputs=[chunk_settings_row, chunk_preview_display]
+        )
+        
+        # Update chunk preview when duration changes
+        def update_chunk_preview_display(video_path, chunk_duration):
+            return preview_chunk_processing(video_path, chunk_duration)
+        
+        chunk_duration_slider.change(
+            fn=update_chunk_preview_display,
+            inputs=[input_video, chunk_duration_slider],
+            outputs=[chunk_preview_display]
         )
 
         # Batch processing handler
