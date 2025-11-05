@@ -190,10 +190,20 @@ def get_input_params(image_tensor, scale):
     scaled_w = w0 * scale
     scaled_h = h0 * scale
     
-    # Round to nearest multiple of 128 to minimize aspect ratio distortion
-    # Using round() instead of floor division to get closest valid dimensions
-    tW = max(multiple, round(scaled_w / multiple) * multiple)
-    tH = max(multiple, round(scaled_h / multiple) * multiple)
+    # Round to nearest multiple of 128 to minimize padding while preserving aspect ratio
+    # This adds small black borders instead of distorting the image
+    tW = round(scaled_w / multiple) * multiple
+    tH = round(scaled_h / multiple) * multiple
+    
+    # Ensure minimum size
+    tW = max(multiple, tW)
+    tH = max(multiple, tH)
+    
+    # Log padding info if significant
+    pad_w = tW - scaled_w
+    pad_h = tH - scaled_h
+    if pad_w > 0 or pad_h > 0:
+        log(f"Adding padding to preserve aspect ratio: {int(scaled_w)}x{int(scaled_h)} → {tW}x{tH} (padding: {int(pad_w)}px width, {int(pad_h)}px height)", message_type='info')
     
     # Use smallest_8n1_geq to round UP and preserve all frames
     F = smallest_8n1_geq(N0 + 4)
@@ -203,25 +213,53 @@ def get_input_params(image_tensor, scale):
 def input_tensor_generator(image_tensor: torch.Tensor, device, scale: int = 4, dtype=torch.bfloat16):
     N0, h0, w0, _ = image_tensor.shape
     tH, tW, Fs = get_input_params(image_tensor, scale)
+    
+    # Calculate padding needed to reach target dimensions
+    scaled_h = h0 * scale
+    scaled_w = w0 * scale
+    pad_h = tH - scaled_h
+    pad_w = tW - scaled_w
+    pad_top = pad_h // 2
+    pad_bottom = pad_h - pad_top
+    pad_left = pad_w // 2
+    pad_right = pad_w - pad_left
+    
     for i in range(Fs):
         frame_idx = min(i, N0 - 1)
         frame_slice = image_tensor[frame_idx].to(device)
         tensor_bchw = frame_slice.permute(2, 0, 1).unsqueeze(0)
-        # Resize directly to target dimensions to preserve aspect ratio
-        upscaled_tensor = F.interpolate(tensor_bchw, size=(tH, tW), mode='bicubic', align_corners=False)
+        # Resize to exact scaled dimensions (preserves aspect ratio)
+        upscaled_tensor = F.interpolate(tensor_bchw, size=(scaled_h, scaled_w), mode='bicubic', align_corners=False)
+        # Pad to reach target dimensions (multiple of 128)
+        if pad_h > 0 or pad_w > 0:
+            upscaled_tensor = F.pad(upscaled_tensor, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
         tensor_out = (upscaled_tensor.squeeze(0) * 2.0 - 1.0)
         yield tensor_out.to('cpu').to(dtype)
 
 def prepare_input_tensor(image_tensor: torch.Tensor, device, scale: int = 4, dtype=torch.bfloat16):
     N0, h0, w0, _ = image_tensor.shape
     tH, tW, Fs = get_input_params(image_tensor, scale)
+    
+    # Calculate padding needed to reach target dimensions
+    scaled_h = h0 * scale
+    scaled_w = w0 * scale
+    pad_h = tH - scaled_h
+    pad_w = tW - scaled_w
+    pad_top = pad_h // 2
+    pad_bottom = pad_h - pad_top
+    pad_left = pad_w // 2
+    pad_right = pad_w - pad_left
+    
     frames = []
     for i in range(Fs):
         frame_idx = min(i, N0 - 1)
         frame_slice = image_tensor[frame_idx].to(device)
         tensor_bchw = frame_slice.permute(2, 0, 1).unsqueeze(0)
-        # Resize directly to target dimensions to preserve aspect ratio
-        upscaled_tensor = F.interpolate(tensor_bchw, size=(tH, tW), mode='bicubic', align_corners=False)
+        # Resize to exact scaled dimensions (preserves aspect ratio)
+        upscaled_tensor = F.interpolate(tensor_bchw, size=(scaled_h, scaled_w), mode='bicubic', align_corners=False)
+        # Pad to reach target dimensions (multiple of 128)
+        if pad_h > 0 or pad_w > 0:
+            upscaled_tensor = F.pad(upscaled_tensor, (pad_left, pad_right, pad_top, pad_bottom), mode='constant', value=0)
         tensor_out = (upscaled_tensor.squeeze(0) * 2.0 - 1.0).to('cpu').to(dtype)
         frames.append(tensor_out)
     vid_stacked = torch.stack(frames, 0)
@@ -856,8 +894,8 @@ def analyze_input_video(video_path):
                     <div style="font-size: 1.1em; font-weight: 600; color: #362e54;">{file_size_display}</div>
                 </div>
             </div>
-            <div style="font-size: 0.8em; color: #999; text-align: center; margin-top: 8px;">
-                ⚠️ Note: Output dimensions should idealy be multiples of 128 (model requirement). Videos with non-standard resolutions may have noticeable aspect ratio changes.
+            <div style="font-size: 0.8em; color: #666; text-align: center; margin-top: 8px;">
+                ℹ️ Output dimensions are padded to multiples of 128 (model requirement). Small black borders may appear to preserve aspect ratio.
             </div>
         </div>
         '''
@@ -2295,8 +2333,8 @@ def create_ui():
                     '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload video to enable resize</div>',
                     gr.update(maximum=60, value=0, interactive=False),
                     gr.update(maximum=60, value=0, interactive=False),
-                    gr.update(maximum=60, value=0, interactive=False),
-                    gr.update(maximum=60, value=0, interactive=False),
+                    # gr.update(maximum=60, value=0, interactive=False),
+                    # gr.update(maximum=60, value=0, interactive=False),
                     '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">Upload video to enable trim</div>',
                     '<div style="padding: 6px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">💡 Enable chunk processing for videos that exceed your available VRAM</div>'
                 )
