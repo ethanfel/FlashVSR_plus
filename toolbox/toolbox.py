@@ -588,12 +588,20 @@ class ToolboxProcessor:
                     print(f"Could not remove temp ping-pong unit: {e_clean_pp}")
             gc.collect()
             
-    def export_video(self, video_path, export_format, quality, max_width, output_name, progress=gr.Progress()):
+    def export_video(self, video_path, export_format, quality, max_width, output_name, two_pass=False, progress=gr.Progress()):
         if not video_path: print("No input video to export."); return None
         if not self.has_ffmpeg: print("FFmpeg is required for export."); return None
-        print(f"Exporting video to {export_format} with quality {quality} and max width {max_width}px.")
+        print(f"Exporting video to {export_format} with quality {quality} and max width {max_width}px (Two-pass: {two_pass}).")
         try:
-            ext = f".{export_format.lower()}"
+            # Determine file extension based on format
+            ext_map = {
+                "MP4 (H.264)": ".mp4",
+                "MP4 (H.265)": ".mp4",
+                "WebM (VP9)": ".webm",
+                "GIF": ".gif"
+            }
+            ext = ext_map.get(export_format, ".mp4")
+            
             base_name = output_name if output_name and output_name.strip() else Path(video_path).stem
             suffix = f"exported_{max_width}w_{quality}q"
             # GIFs are always saved permanently, others respect autosave setting.
@@ -601,26 +609,234 @@ class ToolboxProcessor:
             output_path = self._generate_output_path(base_name, suffix, ext=ext, is_temp=is_temp_save)
             if export_format == "GIF": print(f"INFO: GIF format selected. Output will be saved to permanent folder: {output_path}")
 
-            ffmpeg_cmd = [self.ffmpeg_exe, "-y", "-i", video_path]
-            if export_format == "MP4":
-                crf = int(28 - (quality / 100) * 10)
-                ffmpeg_cmd.extend(["-vf", f"scale='min({max_width},iw)':-2:flags=lanczos", "-c:v", "libx264", "-preset", "medium", "-crf", str(crf), "-pix_fmt", "yuv420p", "-c:a", "aac", "-b:a", "128k"])
-            elif export_format == "WebM":
-                crf = int(35 - (quality / 100) * 10)
-                ffmpeg_cmd.extend(["-vf", f"scale='min({max_width},iw)':-2:flags=lanczos", "-c:v", "libvpx-vp9", "-crf", str(crf), "-b:v", "0", "-c:a", "libopus", "-b:a", "96k"])
+            # Common video filter
+            vf_scale = f"scale='min({max_width},iw)':-2:flags=lanczos"
+            
+            if export_format == "MP4 (H.264)":
+                # CRF range: 0=lossless, 23=default, 51=worst
+                # Quality slider: 100%→15 (near-lossless), 50%→23 (default), 0%→35 (low quality)
+                crf = int(35 - (quality / 100) * 20)
+                
+                if two_pass:
+                    # Two-pass encoding for better compression efficiency
+                    progress(0.2, desc="Encoding pass 1/2 (analyzing)...")
+                    pass1_cmd = [
+                        self.ffmpeg_exe, "-y", "-i", video_path,
+                        "-vf", vf_scale,
+                        "-c:v", "libx264",
+                        "-preset", "slow",
+                        "-b:v", f"{self._calculate_target_bitrate(video_path, quality, max_width)}k",
+                        "-pass", "1",
+                        "-passlogfile", str(self.temp_dir / "ffmpeg2pass"),
+                        "-an",
+                        "-f", "null",
+                        "NUL" if os.name == 'nt' else "/dev/null"
+                    ]
+                    subprocess.run(pass1_cmd, check=True, capture_output=True, text=True)
+                    
+                    progress(0.5, desc="Encoding pass 2/2 (final)...")
+                    pass2_cmd = [
+                        self.ffmpeg_exe, "-y", "-i", video_path,
+                        "-vf", vf_scale,
+                        "-c:v", "libx264",
+                        "-preset", "slow",
+                        "-b:v", f"{self._calculate_target_bitrate(video_path, quality, max_width)}k",
+                        "-pass", "2",
+                        "-passlogfile", str(self.temp_dir / "ffmpeg2pass"),
+                        "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-b:a", "96k",
+                        str(output_path)
+                    ]
+                    subprocess.run(pass2_cmd, check=True, capture_output=True, text=True)
+                    
+                    # Clean up pass log files
+                    for f in self.temp_dir.glob("ffmpeg2pass*"):
+                        try: f.unlink()
+                        except: pass
+                else:
+                    # Single-pass CRF encoding
+                    ffmpeg_cmd = [
+                        self.ffmpeg_exe, "-y", "-i", video_path,
+                        "-vf", vf_scale,
+                        "-c:v", "libx264",
+                        "-preset", "slow",
+                        "-crf", str(crf),
+                        "-pix_fmt", "yuv420p",
+                        "-c:a", "aac", "-b:a", "96k",
+                        str(output_path)
+                    ]
+                    progress(0.3, desc=f"Encoding {export_format}...")
+                    subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+                
+            elif export_format == "MP4 (H.265)":
+                # H.265/HEVC: 30-50% better compression than H.264 at same quality
+                crf = int(35 - (quality / 100) * 20)
+                
+                if two_pass:
+                    progress(0.2, desc="Encoding pass 1/2 (analyzing)...")
+                    pass1_cmd = [
+                        self.ffmpeg_exe, "-y", "-i", video_path,
+                        "-vf", vf_scale,
+                        "-c:v", "libx265",
+                        "-preset", "slow",
+                        "-b:v", f"{self._calculate_target_bitrate(video_path, quality, max_width, hevc=True)}k",
+                        "-x265-params", f"pass=1:log-level=error",
+                        "-an",
+                        "-f", "null",
+                        "NUL" if os.name == 'nt' else "/dev/null"
+                    ]
+                    subprocess.run(pass1_cmd, check=True, capture_output=True, text=True)
+                    
+                    progress(0.5, desc="Encoding pass 2/2 (final)...")
+                    pass2_cmd = [
+                        self.ffmpeg_exe, "-y", "-i", video_path,
+                        "-vf", vf_scale,
+                        "-c:v", "libx265",
+                        "-preset", "slow",
+                        "-b:v", f"{self._calculate_target_bitrate(video_path, quality, max_width, hevc=True)}k",
+                        "-x265-params", f"pass=2:log-level=error",
+                        "-pix_fmt", "yuv420p",
+                        "-tag:v", "hvc1",
+                        "-c:a", "aac", "-b:a", "96k",
+                        str(output_path)
+                    ]
+                    subprocess.run(pass2_cmd, check=True, capture_output=True, text=True)
+                    
+                    # Clean up x265 log files
+                    for f in Path.cwd().glob("x265_*pass.log*"):
+                        try: f.unlink()
+                        except: pass
+                else:
+                    ffmpeg_cmd = [
+                        self.ffmpeg_exe, "-y", "-i", video_path,
+                        "-vf", vf_scale,
+                        "-c:v", "libx265",
+                        "-preset", "slow",
+                        "-crf", str(crf),
+                        "-pix_fmt", "yuv420p",
+                        "-tag:v", "hvc1",
+                        "-c:a", "aac", "-b:a", "96k",
+                        str(output_path)
+                    ]
+                    progress(0.3, desc=f"Encoding {export_format}...")
+                    subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+                
+            elif export_format == "WebM (VP9)":
+                # VP9: Two-pass is highly recommended for VP9
+                crf = int(45 - (quality / 100) * 25)
+                target_bitrate = self._calculate_target_bitrate(video_path, quality, max_width, vp9=True)
+                
+                progress(0.2, desc="Encoding pass 1/2 (analyzing)...")
+                pass1_cmd = [
+                    self.ffmpeg_exe, "-y", "-i", video_path,
+                    "-vf", vf_scale,
+                    "-c:v", "libvpx-vp9",
+                    "-b:v", f"{target_bitrate}k",
+                    "-crf", str(crf),
+                    "-pass", "1",
+                    "-passlogfile", str(self.temp_dir / "ffmpeg2pass"),
+                    "-row-mt", "1",
+                    "-an",
+                    "-f", "null",
+                    "NUL" if os.name == 'nt' else "/dev/null"
+                ]
+                subprocess.run(pass1_cmd, check=True, capture_output=True, text=True)
+                
+                progress(0.5, desc="Encoding pass 2/2 (final)...")
+                pass2_cmd = [
+                    self.ffmpeg_exe, "-y", "-i", video_path,
+                    "-vf", vf_scale,
+                    "-c:v", "libvpx-vp9",
+                    "-b:v", f"{target_bitrate}k",
+                    "-crf", str(crf),
+                    "-pass", "2",
+                    "-passlogfile", str(self.temp_dir / "ffmpeg2pass"),
+                    "-row-mt", "1",
+                    "-c:a", "libopus", "-b:a", "64k",
+                    str(output_path)
+                ]
+                subprocess.run(pass2_cmd, check=True, capture_output=True, text=True)
+                
+                # Clean up pass log files
+                for f in self.temp_dir.glob("ffmpeg2pass*"):
+                    try: f.unlink()
+                    except: pass
+                
             elif export_format == "GIF":
                 progress(0.2, desc="Generating GIF palette (Pass 1/2)...")
                 palette_path = self.temp_dir / "palette.png"
-                palette_cmd = [self.ffmpeg_exe, "-y", "-i", video_path, "-vf", f"scale='min({max_width},iw)':-2:flags=lanczos,palettegen", str(palette_path)]
+                palette_cmd = [self.ffmpeg_exe, "-y", "-i", video_path, "-vf", f"{vf_scale},palettegen", str(palette_path)]
                 subprocess.run(palette_cmd, check=True, capture_output=True, text=True)
-                ffmpeg_cmd.extend(["-i", str(palette_path), "-filter_complex", f"[0:v]scale='min({max_width},iw)':-2:flags=lanczos[v];[v][1:v]paletteuse", "-an"])
-            ffmpeg_cmd.append(str(output_path))
-            progress(0.6, desc=f"Encoding {export_format}...")
-            subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+                
+                progress(0.5, desc="Encoding GIF (Pass 2/2)...")
+                ffmpeg_cmd = [
+                    self.ffmpeg_exe, "-y", "-i", video_path, "-i", str(palette_path),
+                    "-filter_complex", f"[0:v]{vf_scale}[v];[v][1:v]paletteuse",
+                    "-an",
+                    str(output_path)
+                ]
+                subprocess.run(ffmpeg_cmd, check=True, capture_output=True, text=True)
+                
+            progress(1.0, desc="Export complete!")
+            
+            # Log file size for user feedback
+            if os.path.exists(output_path):
+                size_mb = os.path.getsize(output_path) / (1024 * 1024)
+                print(f"Export complete: {output_path} ({size_mb:.2f} MB)")
+            
             return str(output_path)
         except subprocess.CalledProcessError as e:
             print(f"ERROR: FFmpeg failed during export to {export_format}.\nCmd: {' '.join(e.cmd)}\nStderr: {e.stderr}"); return video_path
         except Exception as e: print(f"Error during export: {e}\n{traceback.format_exc()}"); return video_path
+    
+    def _calculate_target_bitrate(self, video_path, quality, max_width, hevc=False, vp9=False):
+        """Calculate target bitrate based on resolution and quality for two-pass encoding."""
+        try:
+            # Get video info
+            reader = imageio.get_reader(video_path)
+            meta = reader.get_meta_data()
+            width = meta.get('size', (1920, 1080))[0]
+            height = meta.get('size', (1920, 1080))[1]
+            fps = meta.get('fps', 30)
+            reader.close()
+            
+            # Calculate output dimensions
+            if width > max_width:
+                scale_factor = max_width / width
+                output_width = max_width
+                output_height = int(height * scale_factor)
+            else:
+                output_width = width
+                output_height = height
+            
+            # Calculate pixels per frame
+            pixels = output_width * output_height
+            
+            # Base bitrate calculation (bits per pixel per frame)
+            # Quality 100 = 0.15 bpp, Quality 50 = 0.08 bpp, Quality 0 = 0.03 bpp
+            bpp = 0.03 + (quality / 100) * 0.12
+            
+            # Adjust for codec efficiency
+            if hevc:
+                bpp *= 0.6  # H.265 is ~40% more efficient
+            elif vp9:
+                bpp *= 0.65  # VP9 is ~35% more efficient
+            
+            # Calculate bitrate in kbps
+            bitrate = int((pixels * fps * bpp) / 1000)
+            
+            # Clamp to reasonable ranges
+            min_bitrate = 500
+            max_bitrate = 50000
+            bitrate = max(min_bitrate, min(bitrate, max_bitrate))
+            
+            print(f"Calculated target bitrate: {bitrate}k for {output_width}x{output_height} @ {fps}fps")
+            return bitrate
+            
+        except Exception as e:
+            print(f"Error calculating bitrate, using default: {e}")
+            # Fallback bitrates based on quality
+            return int(2000 + (quality / 100) * 8000)
 
     def process_pipeline(self, input_path, operations, params, progress=gr.Progress()):
         """Processes a single video through a pipeline of operations."""

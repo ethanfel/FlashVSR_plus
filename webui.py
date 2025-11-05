@@ -1084,10 +1084,12 @@ def preview_trim(video_path, start_time, end_time):
     
     # Clamp values
     start_time = max(0, min(start_time, total_duration))
-    end_time = max(start_time, min(end_time, total_duration))
     
+    # Handle end_time = 0 as "end of video" before clamping
     if end_time == 0:
         end_time = total_duration
+    else:
+        end_time = max(start_time, min(end_time, total_duration))
     
     # Validate range
     if end_time <= start_time:
@@ -1105,41 +1107,6 @@ def preview_trim(video_path, start_time, end_time):
         return f'<div style="padding: 8px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.9em; text-align: center;">Processing full video ({total_duration:.1f}s) ✓</div>'
     else:
         return f'<div style="padding: 8px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 4px; color: #155724; font-size: 0.9em; text-align: center;">Will trim: {start_time:.1f}s → {end_time:.1f}s ({trim_duration:.1f}s) ✓</div>'
-
-def preview_chunk(video_path, start_time, end_time, chunk_duration):
-    """Generate preview text showing what chunk operation will do."""
-    if not video_path:
-        return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 4px; color: #6c757d; font-size: 0.9em; text-align: center;">No video loaded</div>'
-    
-    total_duration = get_video_duration(video_path)
-    if total_duration == 0:
-        return '<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404; font-size: 0.9em; text-align: center;">⚠️ Could not read video duration</div>'
-    
-    # Clamp values
-    start_time = max(0, min(start_time, total_duration))
-    end_time = max(start_time, min(end_time, total_duration))
-    
-    if end_time == 0:
-        end_time = total_duration
-    
-    # Validate range
-    if end_time <= start_time:
-        return '<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24; font-size: 0.9em; text-align: center;">❌ End time must be after start time</div>'
-    
-    trim_duration = end_time - start_time
-    
-    # Validate chunk duration
-    if chunk_duration <= 0:
-        return '<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24; font-size: 0.9em; text-align: center;">❌ Chunk duration must be greater than 0</div>'
-    
-    num_chunks = math.ceil(trim_duration / chunk_duration)
-    avg_chunk_size = trim_duration / num_chunks
-    
-    return f'''<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404; font-size: 0.9em; text-align: center;">
-        Will create {num_chunks} chunk(s) of ~{avg_chunk_size:.1f}s each<br>
-        Range: {start_time:.1f}s → {end_time:.1f}s ({trim_duration:.1f}s total)<br>
-        <span style="color: #856404;">⚠️ Combined output may have visible seams due to color correction</span>
-    </div>'''
 
 def preview_chunk_processing(video_path, chunk_duration):
     """Generate preview showing how many chunks will be created."""
@@ -1160,20 +1127,8 @@ def preview_chunk_processing(video_path, chunk_duration):
     num_chunks = math.ceil(duration / chunk_duration)
     avg_chunk_size = duration / num_chunks
     
-    # # Estimate processing time (very rough - 2-4 min per 10s chunk)
-    # est_time_per_chunk = 3  # minutes (average)
-    # est_total_time = num_chunks * est_time_per_chunk
-    
-    # time_str = ""
-    # if est_total_time < 60:
-        # time_str = f"~{est_total_time:.0f} min"
-    # else:
-        # hours = est_total_time // 60
-        # mins = est_total_time % 60
-        # time_str = f"~{hours:.0f}h {mins:.0f}m"
-    
-    return f'''<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 4px; color: #856404; font-size: 0.85em; text-align: center;">
-        📊 Will create <strong>{num_chunks} chunks</strong> of ~{avg_chunk_size:.1f}s each<br>
+    return f'''<div style="padding: 8px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">
+        📊 Will create {num_chunks} chunks of ~{avg_chunk_size:.1f}s each<br>
         Video: {format_time_mmss(duration)} ({duration:.1f}s) <br>
     </div>'''
 
@@ -1190,10 +1145,12 @@ def trim_video(video_path, start_time, end_time, progress=gr.Progress()):
     
     total_duration = get_video_duration(video_path)
     start_time = max(0, min(start_time, total_duration))
-    end_time = max(start_time, min(end_time, total_duration))
     
+    # Handle end_time = 0 as "end of video" before clamping
     if end_time == 0:
         end_time = total_duration
+    else:
+        end_time = max(start_time, min(end_time, total_duration))
     
     # Validate that end_time is after start_time
     if end_time <= start_time:
@@ -1258,112 +1215,6 @@ def trim_video(video_path, start_time, end_time, progress=gr.Progress()):
         log(f"Error trimming video: {e}", message_type="error")
         return video_path
 
-def create_video_chunks_with_overlap(video_path, start_time, end_time, chunk_duration, overlap, progress=gr.Progress()):
-    """Split video into overlapping chunks for better context. Returns list of (chunk_path, trim_start, trim_end) tuples."""
-    if not video_path or not os.path.exists(video_path):
-        log("No video provided for chunking", message_type="warning")
-        return []
-    
-    if not is_ffmpeg_available():
-        log("FFmpeg not available, cannot create chunks", message_type="error")
-        return []
-    
-    total_duration = get_video_duration(video_path)
-    min_duration = get_minimum_duration(video_path)
-    fps = get_video_fps(video_path)
-    
-    start_time = max(0, min(start_time, total_duration))
-    end_time = max(start_time, min(end_time, total_duration))
-    
-    if end_time == 0:
-        end_time = total_duration
-    
-    # Validate range
-    if end_time <= start_time:
-        log(f"Invalid chunk range: end time ({end_time:.1f}s) must be after start time ({start_time:.1f}s)", message_type="error")
-        return []
-    
-    # Validate chunk duration
-    if chunk_duration <= 0:
-        log(f"Invalid chunk duration: must be greater than 0", message_type="error")
-        return []
-    
-    # Check if chunk duration is too short
-    if chunk_duration < min_duration:
-        log(f"Chunk duration too short: {chunk_duration:.2f}s. FlashVSR requires at least {min_duration:.2f}s (21 frames @ {fps:.1f} FPS)", message_type="error")
-        return []
-    
-    trim_duration = end_time - start_time
-    
-    # Calculate chunks with overlap
-    chunk_paths = []
-    input_basename = os.path.splitext(os.path.basename(video_path))[0]
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
-    
-    chunk_start = start_time
-    chunk_index = 0
-    
-    while chunk_start < end_time:
-        chunk_index += 1
-        
-        # Add overlap at the start (except for first chunk)
-        actual_start = max(start_time, chunk_start - overlap) if chunk_index > 1 else chunk_start
-        
-        # Calculate end of this chunk
-        chunk_end = min(chunk_start + chunk_duration, end_time)
-        
-        # Add overlap at the end (except for last chunk)
-        actual_end = min(end_time, chunk_end + overlap) if chunk_end < end_time else chunk_end
-        
-        chunk_dur = actual_end - actual_start
-        
-        progress((chunk_index / (trim_duration / chunk_duration)) * 0.8, desc=f"Creating chunk {chunk_index}...")
-        
-        output_filename = f"{input_basename}_chunk{chunk_index:03d}_{timestamp}.mp4"
-        output_path = os.path.join(TEMP_DIR, output_filename)
-        
-        try:
-            ffmpeg_cmd = [
-                'ffmpeg', '-y',
-                '-ss', str(actual_start),
-                '-i', video_path,
-                '-t', str(chunk_dur),
-                '-c:v', 'libx264',
-                '-preset', 'medium',
-                '-crf', '18',
-                '-pix_fmt', 'yuv420p',
-                '-map', '0:v:0',
-                '-map', '0:a:0?',
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                output_path
-            ]
-            
-            result = subprocess.run(
-                ffmpeg_cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            
-            # Store chunk path with trim info (how much to trim from start/end after processing)
-            trim_start_offset = overlap if chunk_index > 1 else 0
-            trim_end_offset = overlap if chunk_end < end_time else 0
-            
-            chunk_paths.append((output_path, trim_start_offset, trim_end_offset))
-            log(f"Created chunk {chunk_index}: {actual_start:.1f}s-{actual_end:.1f}s (will trim {trim_start_offset:.2f}s from start, {trim_end_offset:.2f}s from end)", message_type="info")
-            
-        except subprocess.CalledProcessError as e:
-            log(f"Error creating chunk {chunk_index}: {e}", message_type="error")
-            continue
-        
-        # Move to next chunk (without overlap for positioning)
-        chunk_start = chunk_end
-    
-    progress(1.0, desc=f"Created {len(chunk_paths)} chunks!")
-    log(f"Successfully created {len(chunk_paths)} overlapping chunks", message_type="finish")
-    return chunk_paths
-
 def create_video_chunks(video_path, start_time, end_time, chunk_duration, progress=gr.Progress()):
     """Split video into chunks and return list of chunk paths."""
     if not video_path or not os.path.exists(video_path):
@@ -1376,10 +1227,12 @@ def create_video_chunks(video_path, start_time, end_time, chunk_duration, progre
     
     total_duration = get_video_duration(video_path)
     start_time = max(0, min(start_time, total_duration))
-    end_time = max(start_time, min(end_time, total_duration))
     
+    # Handle end_time = 0 as "end of video" before clamping
     if end_time == 0:
         end_time = total_duration
+    else:
+        end_time = max(start_time, min(end_time, total_duration))
     
     # Validate range
     if end_time <= start_time:
@@ -1679,7 +1532,7 @@ def handle_start_pipeline(
     # Video Loop params
     loop_type, num_loops,
     # Export params
-    export_format, quality, max_width, output_name,
+    export_format, quality, max_width, output_name, two_pass,
     progress=gr.Progress()
 ):
     # Determine input paths based on the active tab
@@ -1704,7 +1557,7 @@ def handle_start_pipeline(
             "loop_type": loop_type, "num_loops": num_loops
         },
         "export": {
-            "export_format": export_format, "quality": quality, "max_width": max_width, "output_name": output_name
+            "export_format": export_format, "quality": quality, "max_width": max_width, "output_name": output_name, "two_pass": two_pass
         }
     }
     
@@ -1886,7 +1739,7 @@ def create_ui():
                                 enable_chunk_processing = gr.Checkbox(
                                     label="Process as Chunks (Low VRAM Mode)",
                                     value=False,
-                                    info="Automatically split, process, and combine video in chunks to reduce memory usage"
+                                    info="Splits video into segments to reduce RAM/VRAM usage. Best for short-form, single-scene content."
                                 )
                             with gr.Row(visible=False) as chunk_settings_row:
                                 chunk_duration_slider = gr.Slider(
@@ -1895,7 +1748,7 @@ def create_ui():
                                     step=1,
                                     value=10,
                                     label="Chunk Duration (seconds)",
-                                    info="Shorter = less VRAM, more chunks. Longer = fewer seams, more VRAM"
+                                    info="Reduces RAM usage (frames in memory) and peak VRAM. Processing time scales linearly with video length."
                                 )
                             chunk_preview_display = gr.HTML(
                                 value='<div style="padding: 6px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">💡 Enable chunk processing for videos that exceed your available VRAM</div>',
@@ -2124,12 +1977,19 @@ def create_ui():
                             with gr.Row():
                                 with gr.Column(scale=2):
                                     export_format_radio = gr.Radio(
-                                        ["MP4", "WebM", "GIF"], value="MP4", label="Output Format",
-                                        info="MP4 is best for general use. WebM is great for web/Discord (smaller size). GIF is a widely-supported format for short, silent, looping clips. GIF output will always be saved."
+                                        ["MP4 (H.264)", "MP4 (H.265)", "WebM (VP9)", "GIF"], 
+                                        value="MP4 (H.264)", 
+                                        label="Output Format",
+                                        info="H.264: Universal compatibility. H.265: 30-50% smaller files, slower encoding. VP9: Great for web. GIF: Short loops."
                                     )
                                     export_quality_slider = gr.Slider(
                                         0, 100, value=85, step=1, label="Quality",
-                                        info="Higher quality means a larger file size. 80-90 is a good balance for MP4/WebM."
+                                        info="100=near-lossless (large), 85=high quality (balanced), 50=medium, 0=low. Higher = larger files."
+                                    )
+                                    export_two_pass = gr.Checkbox(
+                                        label="Two-Pass Encoding",
+                                        value=False,
+                                        info="10-20% better compression at same quality. Slower but more efficient. Recommended for Discord/file size limits."
                                     )
                                 with gr.Column(scale=2):
                                     export_resize_slider = gr.Slider(
@@ -2617,8 +2477,8 @@ def create_ui():
         )
         
         export_video_btn.click(
-            lambda video_path, status, format, quality, width, name: handle_single_operation(toolbox_processor.export_video, video_path, status, export_format=format, quality=quality, max_width=width, output_name=name),
-            inputs=[tb_input_video, gr.Textbox("Exporting", visible=False), export_format_radio, export_quality_slider, export_resize_slider, export_name_input],
+            lambda video_path, status, format, quality, width, name, two_pass: handle_single_operation(toolbox_processor.export_video, video_path, status, export_format=format, quality=quality, max_width=width, output_name=name, two_pass=two_pass),
+            inputs=[tb_input_video, gr.Textbox("Exporting", visible=False), export_format_radio, export_quality_slider, export_resize_slider, export_name_input, export_two_pass],
             outputs=[processed_video, tb_status_message]
         )
 
@@ -2686,7 +2546,8 @@ def create_ui():
                 export_format_radio,
                 export_quality_slider,
                 export_resize_slider,
-                export_name_input
+                export_name_input,
+                export_two_pass
             ],
             outputs=[processed_video, tb_status_message]
         )
