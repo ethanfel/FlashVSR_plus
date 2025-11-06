@@ -1227,6 +1227,35 @@ def preview_chunk_processing(video_path, chunk_duration):
     </div>'''
 
 
+def save_preprocessed_video(video_path, progress=gr.Progress()):
+    """Save the current preprocessed video to outputs/preprocessed folder."""
+    if not video_path or not os.path.exists(video_path):
+        log("No video to save", message_type="warning")
+        return
+    
+    try:
+        # Create preprocessed output directory
+        preprocessed_dir = os.path.join(OUTPUT_DIR, "preprocessed")
+        os.makedirs(preprocessed_dir, exist_ok=True)
+        
+        # Generate output filename with timestamp
+        input_basename = os.path.splitext(os.path.basename(video_path))[0]
+        timestamp = time.strftime("%H%M%S")
+        output_filename = f"{input_basename}_preprocessed_{timestamp}.mp4"
+        output_path = os.path.join(preprocessed_dir, output_filename)
+        
+        log(f"Saving preprocessed video to: {output_path}", message_type="info")
+        progress(0.5, desc="Saving preprocessed video...")
+        
+        # Copy the video file
+        shutil.copy(video_path, output_path)
+        
+        progress(1.0, desc="Save complete!")
+        log(f"Preprocessed video saved successfully: {output_path}", message_type="finish")
+        
+    except Exception as e:
+        log(f"Error saving preprocessed video: {e}", message_type="error")
+
 def trim_video(video_path, start_time, end_time, progress=gr.Progress()):
     """Trim video to specified time range using FFmpeg."""
     if not video_path or not os.path.exists(video_path):
@@ -1753,8 +1782,6 @@ def create_ui():
                             video_analysis_html = gr.HTML(
                                 value='<div style="padding: 12px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center;">Upload video to see analysis</div>'
                             )
-                            with gr.Row():
-                                analyze_video_btn = gr.Button("🔄 Re-analyze", size="sm", variant="secondary", scale=1)
                             
                             gr.Markdown("---")
                             
@@ -1805,6 +1832,10 @@ def create_ui():
                                 )
                                 
                                 resize_button = gr.Button("📐 Apply Resize", size="sm", variant="primary")
+                            
+                            # Save preprocessed video button
+                            gr.Markdown('<span style="font-size: 0.9em; color: #666;">Saves the processed video to outputs\preprocessed</span>')
+                            save_preprocessed_btn = gr.Button("💾 Save Input Video", size="sm", variant="primary")
                             
                             # Hidden state to store current video dimensions and duration
                             current_video_width = gr.State(0)
@@ -2247,22 +2278,6 @@ def create_ui():
             
             return html, width, height, duration, resize_slider_update, resize_preview, trim_start_update, trim_end_update, trim_preview
         
-        analyze_video_btn.click(
-            fn=handle_analyze,
-            inputs=[input_video],
-            outputs=[
-                video_analysis_html, 
-                current_video_width, 
-                current_video_height, 
-                current_video_duration,
-                resize_max_width_slider, 
-                resize_preview_html,
-                trim_start_slider,
-                trim_end_slider,
-                trim_preview_html
-            ]
-        )
-        
         # Update preview when slider changes
         def update_resize_preview(video_path, max_width):
             return preview_resize(video_path, max_width)
@@ -2383,6 +2398,12 @@ def create_ui():
             fn=handle_resize_and_update,
             inputs=[input_video, resize_max_width_slider],
             outputs=[input_video, video_analysis_html, current_video_duration, resize_max_width_slider, resize_preview_html, trim_start_slider, trim_end_slider, trim_preview_html]
+        )
+        
+        # Save preprocessed video button handler
+        save_preprocessed_btn.click(
+            fn=save_preprocessed_video,
+            inputs=[input_video]
         )
         
         # Main processing handler - routes to chunk or normal processing
