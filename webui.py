@@ -116,19 +116,69 @@ def dummy_tqdm(iterable, *args, **kwargs):
 def model_download(model_version="v1.0"):
     """Download FlashVSR models from HuggingFace. Supports v1.0 and v1.1."""
     if model_version == "v1.1":
-        # v1.1 models are in the same repo but different subfolder
         model_name = "JunhaoZhuang/FlashVSR-v1.1"
         model_dir = os.path.join(ROOT_DIR, "models", "FlashVSR-v1.1")
-        # Note: If v1.1 gets its own repo, update model_name here
     else:  # v1.0
         model_name = "JunhaoZhuang/FlashVSR"
         model_dir = os.path.join(ROOT_DIR, "models", "FlashVSR")
     
-    if not os.path.exists(model_dir):
+    # Check if critical model files exist
+    required_files = [
+        "diffusion_pytorch_model_streaming_dmd.safetensors",
+        "Wan2.1_VAE.pth",
+        "LQ_proj_in.ckpt",
+        "TCDecoder.ckpt"
+    ]
+    
+    needs_download = not os.path.exists(model_dir)
+    if not needs_download:
+        # Check if all required files exist
+        missing_files = [f for f in required_files if not os.path.exists(os.path.join(model_dir, f))]
+        needs_download = len(missing_files) > 0
+        if needs_download:
+            log(f"Incomplete {model_version} model files detected. Re-downloading...", message_type='warning')
+    
+    if needs_download:
         log(f"Downloading {model_version} model '{model_name}' from huggingface...", message_type='info')
-        snapshot_download(repo_id=model_name, local_dir=model_dir, local_dir_use_symlinks=False, resume_download=True)
-        log(f"{model_version} model download complete!", message_type='finish')
-        print()
+        try:
+            # snapshot_download will automatically resume interrupted downloads
+            # and skip already downloaded files
+            snapshot_download(
+                repo_id=model_name, 
+                local_dir=model_dir,
+                local_dir_use_symlinks=False  # Keep for compatibility, warnings are harmless
+            )
+            log(f"{model_version} model download complete!", message_type='finish')
+            print()
+        except Exception as e:
+            log(f"Error downloading models: {e}", message_type='error')
+            log("Please check your internet connection and try again.", message_type='warning')
+            raise
+
+def check_model_status(model_version="v1.0"):
+    """Check if models need to be downloaded and return appropriate status message."""
+    if model_version == "v1.1":
+        model_dir = os.path.join(ROOT_DIR, "models", "FlashVSR-v1.1")
+    else:
+        model_dir = os.path.join(ROOT_DIR, "models", "FlashVSR")
+    
+    # Check if directory exists AND contains the critical model files
+    required_files = [
+        "diffusion_pytorch_model_streaming_dmd.safetensors",
+        "Wan2.1_VAE.pth",
+        "LQ_proj_in.ckpt",
+        "TCDecoder.ckpt"
+    ]
+    
+    if not os.path.exists(model_dir):
+        return f'<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; color: #856404; font-size: 0.95em;">⏳ First-time setup: Downloading {model_version} models (~6-7GB) from HuggingFace. This may take several minutes depending on your connection. Please be patient and check the terminal for progress...</div>'
+    
+    # Check if all required files exist
+    missing_files = [f for f in required_files if not os.path.exists(os.path.join(model_dir, f))]
+    if missing_files:
+        return f'<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; color: #721c24; font-size: 0.95em;">⚠️ Incomplete model files detected: Re-downloading missing {model_version} model(s). Previous download may have been interrupted. Please be patient and check the terminal for progress...</div>'
+    
+    return gr.update()  # Return no update if models exist and are complete
 
 def tensor2video(frames: torch.Tensor):
     video_squeezed = frames.squeeze(0)
@@ -865,8 +915,10 @@ def run_flashvsr_single(
         final_save_path = os.path.join(OUTPUT_DIR, output_filename)
         shutil.copy(temp_output_path, final_save_path)
         log(f"Processing complete! Auto-saved to: {final_save_path}", message_type="finish")
+        status_msg = f'<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Processing complete! Auto-saved to: {final_save_path}</div>'
     else:
         log(f"Processing complete! Use 'Save Output' to save to outputs folder.", message_type="finish")
+        status_msg = '<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Processing complete! Use \'Save Output\' to save to outputs folder.</div>'
     
     progress(1, desc="Done!")
     
@@ -875,7 +927,8 @@ def run_flashvsr_single(
     return (
         temp_output_path,  # Display the upscaled output
         temp_output_path,  # Path for manual save
-        (input_path, temp_output_path)  # Video slider comparison
+        (input_path, temp_output_path),  # Video slider comparison
+        status_msg  # Status message for UI
     )
 
 
@@ -1207,7 +1260,7 @@ def run_flashvsr_batch_image(
                     return iterable
             
             # Process the image using the single image function
-            temp_output_path, _, _ = run_flashvsr_image(
+            temp_output_path, _, _, _ = run_flashvsr_image(
                 image_path=image_path,
                 mode=mode,
                 model_version=model_version,
@@ -1253,9 +1306,10 @@ def run_flashvsr_batch_image(
     batch_messages.append(f"\n✅ Batch processing complete! All results saved to: {batch_output_dir}")
     log(f"Batch processing complete! Results saved to: {batch_output_dir}", message_type='finish')
     
-    # Return the last processed image and a status message
+    # Return the last processed image and status messages
     status_message = "\n".join(batch_messages)
-    return last_output_path, status_message
+    status_html = f'<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Batch processing complete! All results saved to: {batch_output_dir}</div>'
+    return last_output_path, status_message, status_html
 
 
 def run_flashvsr_image(
@@ -1296,7 +1350,7 @@ def run_flashvsr_image(
             return None, None, None
         
         # Process through the video pipeline
-        video_output, save_path, slider_data = run_flashvsr_single(
+        video_output, save_path, slider_data, _ = run_flashvsr_single(
             input_path=temp_frames_dir,
             mode=mode,
             model_version=model_version,
@@ -1374,8 +1428,10 @@ def run_flashvsr_image(
             final_save_path = os.path.join(images_output_dir, output_filename)
             shutil.copy(temp_image_path, final_save_path)
             log(f"Image processing complete! Auto-saved to: {final_save_path}", message_type="finish")
+            status_msg = f'<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Image processing complete! Auto-saved to: {final_save_path}</div>'
         else:
             log(f"Image processing complete! Use 'Save Output' to save to outputs/images folder.", message_type="finish")
+            status_msg = '<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Image processing complete! Use \'Save Output\' to save to outputs/images folder.</div>'
         
         progress(1, desc="Done!")
         
@@ -1413,8 +1469,8 @@ def run_flashvsr_image(
             log(f"Could not create comparison: {e}", message_type="warning")
             comparison_tuple = None
         
-        # Return: output_image, output_path_for_save, comparison_tuple_for_slider
-        return temp_image_path, temp_image_path, comparison_tuple
+        # Return: output_image, output_path_for_save, comparison_tuple_for_slider, status_message
+        return temp_image_path, temp_image_path, comparison_tuple, status_msg
         
     finally:
         # Cleanup temp frames directory
@@ -1483,7 +1539,7 @@ def run_flashvsr_batch(
             
             # Process the video using the single video function
             # Note: We pass autosave=False to prevent double-saving
-            temp_output_path, _, _ = run_flashvsr_single(
+            temp_output_path, _, _, _ = run_flashvsr_single(
                 input_path=video_path,
                 mode=mode,
                 model_version=model_version,
@@ -2205,7 +2261,7 @@ def process_video_with_chunks(
             # Process this chunk using the main processing function
             # Seed is already fixed at the start, so all chunks use the same seed
             # Note: create_comparison=False for chunks (comparison only works on full video)
-            output_path, _, _ = run_flashvsr_single(
+            output_path, _, _, _ = run_flashvsr_single(
                 input_path=chunk_path,
                 mode=mode,
                 model_version=model_version,
@@ -2434,6 +2490,7 @@ def create_ui():
     
     with gr.Blocks(css=css) as demo:
         output_file_path = gr.State(None)
+        completion_status = gr.State(None)
 
         with gr.Tabs(elem_id="main_tabs") as main_tabs:
             with gr.TabItem("FlashVSR", id=0):
@@ -3050,6 +3107,12 @@ def create_ui():
             """Returns a random idle state HTML instead of empty string."""
             return get_random_idle_state()
         
+        def display_status_with_timeout(status_msg):
+            """Display status message, sleep, then clear to idle state."""
+            # This is a helper to avoid repeating the .then() chain
+            # Returns: (status_msg, None, idle_state) for the three steps
+            return status_msg
+        
         def toggle_tiled_dit_options(is_checked):
             return gr.update(visible=is_checked)
         
@@ -3333,6 +3396,10 @@ def create_ui():
             inputs=[],
             outputs=[video_output_analysis_html]
         ).then(
+            fn=check_model_status,
+            inputs=[model_version_radio],
+            outputs=[save_status]
+        ).then(
             fn=should_randomize_seed,
             inputs=[seed_number, randomize_seed],
             outputs=[seed_number]
@@ -3345,11 +3412,26 @@ def create_ui():
                 dtype_radio, seed_number, device_textbox, fps_number, quality_slider, attention_mode_radio,
                 sparse_ratio_slider, kv_ratio_slider, local_range_slider, autosave_checkbox, create_comparison_checkbox
             ],
-            outputs=[video_output, output_file_path, video_slider_output]
+            outputs=[video_output, output_file_path, video_slider_output, completion_status]
         ).then(
             fn=analyze_output_video,
             inputs=[output_file_path],
             outputs=[video_output_analysis_html]
+        ).then(
+            fn=lambda status_msg: status_msg,
+            inputs=[completion_status],
+            outputs=[save_status],
+            show_progress=False
+        ).then(
+            fn=do_sleep,
+            inputs=None,
+            outputs=None,
+            show_progress="hidden"
+        ).then(
+            fn=do_clear,
+            inputs=None,
+            outputs=[save_status],
+            show_progress="hidden"
         )
         
         # Toggle chunk settings visibility and update preview
@@ -3388,12 +3470,17 @@ def create_ui():
                 sparse_ratio, kv_ratio, local_range
             )
             # Return the last processed video for that final dramatic reveal!
-            return last_video, last_video, None
+            status_msg = '<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Batch processing complete!</div>'
+            return last_video, last_video, None, status_msg
         
         batch_run_button.click(
             fn=lambda: gr.update(visible=False),
             inputs=[],
             outputs=[video_output_analysis_html]
+        ).then(
+            fn=check_model_status,
+            inputs=[model_version_radio],
+            outputs=[save_status]
         ).then(
             fn=should_randomize_seed,
             inputs=[seed_number, randomize_seed],
@@ -3406,11 +3493,26 @@ def create_ui():
                 dtype_radio, seed_number, device_textbox, fps_number, quality_slider, attention_mode_radio,
                 sparse_ratio_slider, kv_ratio_slider, local_range_slider
             ],
-            outputs=[video_output, output_file_path, video_slider_output]
+            outputs=[video_output, output_file_path, video_slider_output, completion_status]
         ).then(
             fn=analyze_output_video,
             inputs=[output_file_path],
             outputs=[video_output_analysis_html]
+        ).then(
+            fn=lambda status_msg: status_msg,
+            inputs=[completion_status],
+            outputs=[save_status],
+            show_progress=False
+        ).then(
+            fn=do_sleep,
+            inputs=None,
+            outputs=None,
+            show_progress="hidden"
+        ).then(
+            fn=do_clear,
+            inputs=None,
+            outputs=[save_status],
+            show_progress="hidden"
         )
 
         def update_monitor():
@@ -3513,6 +3615,10 @@ def create_ui():
             inputs=[],
             outputs=[img_output_analysis_html]
         ).then(
+            fn=check_model_status,
+            inputs=[img_model_version],
+            outputs=[img_save_status]
+        ).then(
             fn=should_randomize_img_seed,
             inputs=[img_seed, img_randomize_seed],
             outputs=[img_seed]
@@ -3525,15 +3631,34 @@ def create_ui():
                 img_quality, img_attention_mode, img_sparse_ratio, img_kv_ratio,
                 img_local_range, img_autosave, img_create_comparison
             ],
-            outputs=[img_output, img_output_path, img_comparison]
+            outputs=[img_output, img_output_path, img_comparison, completion_status]
         ).then(
             fn=analyze_output_image,
             inputs=[img_output_path],
             outputs=[img_output_analysis_html]
+        ).then(
+            fn=lambda status_msg: status_msg,
+            inputs=[completion_status],
+            outputs=[img_save_status],
+            show_progress=False
+        ).then(
+            fn=do_sleep,
+            inputs=None,
+            outputs=None,
+            show_progress="hidden"
+        ).then(
+            fn=do_clear,
+            inputs=None,
+            outputs=[img_save_status],
+            show_progress="hidden"
         )
         
         # Batch image run button click
         img_batch_run_button.click(
+            fn=check_model_status,
+            inputs=[img_model_version],
+            outputs=[img_save_status]
+        ).then(
             fn=should_randomize_img_seed,
             inputs=[img_seed, img_randomize_seed],
             outputs=[img_seed]
@@ -3546,7 +3671,22 @@ def create_ui():
                 img_quality, img_attention_mode, img_sparse_ratio, img_kv_ratio,
                 img_local_range, img_create_comparison
             ],
-            outputs=[img_output, img_batch_status]
+            outputs=[img_output, img_batch_status, completion_status]
+        ).then(
+            fn=lambda status_msg: status_msg,
+            inputs=[completion_status],
+            outputs=[img_save_status],
+            show_progress=False
+        ).then(
+            fn=do_sleep,
+            inputs=None,
+            outputs=None,
+            show_progress="hidden"
+        ).then(
+            fn=do_clear,
+            inputs=None,
+            outputs=[img_save_status],
+            show_progress="hidden"
         )
         
         # Save button click
