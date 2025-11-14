@@ -82,8 +82,14 @@ def load_config():
         try:
             with open(CONFIG_FILE, 'r') as f:
                 for line in f:
-                    key, value = line.strip().split('=')
-                    config[key] = value.lower() == 'true'
+                    if '=' not in line:
+                        continue
+                    key, value = line.strip().split('=', 1)
+                    # Convert boolean strings to bool, keep others as strings
+                    if value.lower() in ['true', 'false']:
+                        config[key] = value.lower() == 'true'
+                    else:
+                        config[key] = value
         except:
             pass
     return config
@@ -2519,7 +2525,55 @@ def create_ui():
         config = load_config()
         toolbox_processor = ToolboxProcessor(config.get("tb_autosave", True))
     
-    with gr.Blocks(css=css) as demo:
+    # Available Gradio themes
+    # Built-in Gradio themes
+    BUILTIN_THEMES = {
+        "Default": gr.themes.Default(),
+        "Soft": gr.themes.Soft(),
+        "Monochrome": gr.themes.Monochrome(),
+        "Glass": gr.themes.Glass(),
+        "Base": gr.themes.Base(),
+        "Ocean": gr.themes.Ocean(),
+        "Origin": gr.themes.Origin(),
+        "Citrus": gr.themes.Citrus(),
+    }
+    
+    # Community themes from Hugging Face Spaces
+    COMMUNITY_THEMES = {
+        "Miku": "NoCrypt/miku",
+        "Interstellar": "Nymbo/Interstellar",
+        "xkcd": "gstaff/xkcd",
+    }
+    
+    # Load saved theme preference
+    config = load_config()
+    current_theme = config.get("theme", "Default")
+    custom_theme_string = config.get("custom_theme", "")
+    
+    # Determine which theme to use
+    selected_theme = None
+    if current_theme == "Custom" and custom_theme_string:
+        # Try to load custom theme
+        try:
+            selected_theme = gr.themes.Base.from_hub(custom_theme_string)
+        except Exception as e:
+            log(f"Failed to load custom theme '{custom_theme_string}': {e}", message_type="warning")
+            selected_theme = gr.themes.Default()
+    elif current_theme in BUILTIN_THEMES:
+        selected_theme = BUILTIN_THEMES[current_theme]
+    elif current_theme in COMMUNITY_THEMES:
+        try:
+            selected_theme = gr.themes.Base.from_hub(COMMUNITY_THEMES[current_theme])
+        except Exception as e:
+            log(f"Failed to load community theme '{current_theme}': {e}", message_type="warning")
+            selected_theme = gr.themes.Default()
+    else:
+        selected_theme = gr.themes.Default()
+    
+    # Combine all theme names for dropdown
+    ALL_THEME_NAMES = list(BUILTIN_THEMES.keys()) + list(COMMUNITY_THEMES.keys()) + ["Custom"]
+    
+    with gr.Blocks(css=css, theme=selected_theme) as demo:
         output_file_path = gr.State(None)
         completion_status = gr.State(None)
 
@@ -4086,6 +4140,57 @@ def create_ui():
             outputs=[tb_input_video, tb_status_message, tb_input_analysis_html]
         )
 
+        # Theme Selector
+        with gr.Accordion("⚙️ Settings", open=False):
+            gr.Markdown("### UI Theme")
+            with gr.Row():
+                theme_dropdown = gr.Dropdown(
+                    choices=ALL_THEME_NAMES,
+                    value=current_theme,
+                    label="Select Theme",
+                    info="Choose from built-in or community themes, or select 'Custom' to use your own",
+                    scale=3
+                )
+                theme_status = gr.Textbox(label="Status", scale=2, interactive=False, show_label=False)
+            
+            custom_theme_input = gr.Textbox(
+                label="Custom Theme (Hugging Face Space)",
+                placeholder="e.g., username/theme-name",
+                value=custom_theme_string,
+                info="Enter a Hugging Face Space theme string (only used when 'Custom' is selected). Find themes at: https://huggingface.co/spaces?search=gradio-theme",
+                visible=(current_theme == "Custom")
+            )
+            
+            apply_theme_btn = gr.Button("Apply Theme", size="sm", variant="primary")
+        
+        def toggle_custom_input(theme_name):
+            return gr.update(visible=(theme_name == "Custom"))
+        
+        theme_dropdown.change(
+            fn=toggle_custom_input,
+            inputs=[theme_dropdown],
+            outputs=[custom_theme_input]
+        )
+        
+        def apply_theme(theme_name, custom_theme):
+            config = load_config()
+            config["theme"] = theme_name
+            if theme_name == "Custom":
+                if not custom_theme or not custom_theme.strip():
+                    return "⚠️ Please enter a custom theme string (e.g., username/theme-name)"
+                config["custom_theme"] = custom_theme.strip()
+                save_config(config)
+                return f"✅ Custom theme '{custom_theme}' saved! Restart and Refresh the page to apply."
+            else:
+                config["custom_theme"] = ""
+                save_config(config)
+                return f"✅ Theme '{theme_name}' saved! Restart and Refresh the page to apply."
+        
+        apply_theme_btn.click(
+            fn=apply_theme,
+            inputs=[theme_dropdown, custom_theme_input],
+            outputs=[theme_status]
+        )
 
         # Footer with author credits
         footer_html = """
