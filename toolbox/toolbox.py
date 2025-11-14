@@ -39,6 +39,51 @@ class ToolboxProcessor:
         self.ffmpeg_exe, self.ffprobe_exe, self.has_ffmpeg = self._initialize_ffmpeg()
         self.autosave_enabled = autosave_enabled
         self.rife_handler = RIFEHandler()
+    
+    def _normalize_input_path(self, video_path):
+        """
+        Normalizes input video path to prevent filename length issues.
+        If the path is too long or in a problematic location (like Gradio's temp with hash subdirs),
+        copies the video to toolbox temp directory with a cleaned filename.
+        """
+        if not video_path or not os.path.exists(video_path):
+            return video_path
+        
+        video_path_obj = Path(video_path).resolve()
+        
+        # Check if path is too long (Windows has 260 char limit, be conservative)
+        # Or if it's in a Gradio temp directory with hash subdirectories
+        path_str = str(video_path_obj)
+        is_too_long = len(path_str) > 200
+        is_gradio_temp = 'gradio' in path_str.lower() or len(video_path_obj.parts) > 10
+        
+        if is_too_long or is_gradio_temp:
+            # Create a normalized copy in toolbox temp directory
+            original_name = video_path_obj.stem
+            extension = video_path_obj.suffix
+            
+            # Clean the filename aggressively
+            clean_name = self._clean_filename(original_name, max_base_length=40)
+            
+            # Generate a short unique identifier to avoid collisions
+            import hashlib
+            file_hash = hashlib.md5(path_str.encode()).hexdigest()[:8]
+            
+            normalized_filename = f"{clean_name}_{file_hash}{extension}"
+            normalized_path = self.temp_dir / normalized_filename
+            
+            # Copy if not already normalized
+            if not normalized_path.exists():
+                # Ensure temp directory exists (may have been deleted by cleanup)
+                os.makedirs(self.temp_dir, exist_ok=True)
+                print(f"Normalizing input path (length: {len(path_str)} chars)")
+                print(f"  From: {video_path_obj.name}")
+                print(f"  To: {normalized_filename}")
+                shutil.copy2(video_path, normalized_path)
+            
+            return str(normalized_path)
+        
+        return video_path
         
     def set_autosave_mode(self, is_enabled):
         """Updates the autosave mode."""
@@ -87,6 +132,9 @@ class ToolboxProcessor:
         """Analyzes video file and returns detailed information."""
         if not video_path:
             return "⚠️ No video provided for analysis."
+        
+        # Normalize input path to prevent filename length issues
+        video_path = self._normalize_input_path(video_path)
         
         resolved_path = str(Path(video_path).resolve())
         report = []
@@ -294,39 +342,64 @@ class ToolboxProcessor:
             except Exception: pass
         return ffmpeg_path, ffprobe_path
 
-    def _clean_filename(self, filename):
+    def _clean_filename(self, filename, max_base_length=60):
         """
-        Intelligently handles timestamps in filenames.
-        - Preserves original timestamps from unprocessed files
-        - For processed files, removes only the timestamp added by the most recent operation
+        Aggressively cleans filenames to prevent path length issues.
+        - REMOVES all timestamps to prevent length accumulation
+        - REMOVES duplicate operation suffixes (e.g., multiple _exported_)
+        - TRUNCATES base filename to max_base_length to ensure path compatibility
+        - Preserves essential operation history in a compact form
         """
-        # Check if this filename already contains operation suffixes
-        operation_patterns = ['upscaled_', 'frames_', 'exported_']
-        has_operations = any(pattern in filename for pattern in operation_patterns)
+        # Remove all timestamps (format: _YYYYMMDD_HHMMSS and _YYYYMMDD-HHMMSS)
+        filename = re.sub(r'_\d{8}[-_]\d{6}', '', filename)
         
-        if has_operations:
-            # Find all timestamps in the filename
-            timestamp_pattern = r'_\d{8}_\d{6}'
-            timestamps = re.findall(timestamp_pattern, filename)
-            
-            if len(timestamps) > 1:
-                # Multiple timestamps - remove only the last one (most recent operation)
-                # Replace the last timestamp with empty string
-                last_timestamp = timestamps[-1]
-                filename = filename.replace(last_timestamp, '')
-            elif len(timestamps) == 1:
-                # Only one timestamp - this might be original, but since we have operations,
-                # it's likely from a previous operation, so remove it
-                filename = re.sub(timestamp_pattern, '', filename)
-        # If no operations yet, preserve all timestamps (original file)
+        # Also remove shorter timestamps (format: _HHMMSS)
+        filename = re.sub(r'_\d{6}(?=_|$)', '', filename)
         
-        return filename.strip('_')
+        # Remove duplicate operation suffixes to prevent accumulation
+        # e.g., "exported_3840w_85q_exported_1920w_85q" -> "exported_1920w_85q"
+        filename = re.sub(r'(_exported_\d+w_\d+q)+(?=_exported_)', '', filename)
+        filename = re.sub(r'(_frames_[^_]+)+(?=_frames_)', '', filename)
+        filename = re.sub(r'(_loop_[^_]+)+(?=_loop_)', '', filename)
+        
+        # Clean up multiple underscores that may result from removals
+        filename = re.sub(r'_+', '_', filename)
+        filename = filename.strip('_')
+        
+        # Truncate if still too long (keep first max_base_length chars)
+        # This ensures we stay well under Windows 260 char path limit
+        if len(filename) > max_base_length:
+            # Try to truncate at a word boundary (underscore) if possible
+            truncated = filename[:max_base_length]
+            last_underscore = truncated.rfind('_')
+            if last_underscore > max_base_length // 2:  # Only if we're not losing too much
+                filename = truncated[:last_underscore]
+            else:
+                filename = truncated
+            filename = filename.rstrip('_')
+        
+        return filename
 
     def _generate_output_path(self, input_path, suffix, ext=".mp4", is_temp=False, batch_folder=None):
-        """Generates a unique output path for processed videos, adapted from reference code."""
+        """Generates a unique output path for processed videos with aggressive length management."""
         base_name = self._clean_filename(Path(input_path).stem)
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Use shorter timestamp format (HHMMSS) to save characters
+        timestamp = datetime.now().strftime("%H%M%S")
+        
+        # Build filename with length check
         filename = f"{base_name}_{suffix}_{timestamp}{ext}"
+        
+        # Final safety check: if filename is still too long, truncate base_name further
+        max_filename_length = 150  # Conservative limit for Windows compatibility
+        if len(filename) > max_filename_length:
+            # Calculate how much we need to trim from base_name
+            excess = len(filename) - max_filename_length
+            new_base_length = max(20, len(base_name) - excess - 10)  # Keep at least 20 chars
+            base_name = base_name[:new_base_length].rstrip('_')
+            filename = f"{base_name}_{suffix}_{timestamp}{ext}"
+            print(f"WARNING: Filename truncated to fit path limits: {filename}")
+        
         if is_temp:
             os.makedirs(self.temp_dir, exist_ok=True)
             return self.temp_dir / filename
@@ -377,6 +450,9 @@ class ToolboxProcessor:
     def adjust_frames(self, video_path, fps_mode, speed_factor, use_streaming, output_quality=10, progress=gr.Progress()):
         if not video_path: print("No input video for frame adjustment."); return None
         
+        # Normalize input path to prevent filename length issues
+        video_path = self._normalize_input_path(video_path)
+        
         interpolation_factor = 1
         if "2x" in fps_mode: interpolation_factor = 2
         elif "4x" in fps_mode: interpolation_factor = 4
@@ -389,9 +465,16 @@ class ToolboxProcessor:
         temp_video_path = None
         try:
             print(f"Adjusting frames: Mode={fps_mode}, Speed={speed_factor}x, Streaming: {use_streaming}, Quality: {output_quality}/10")
-            reader = imageio.get_reader(video_path)
-            fps = reader.get_meta_data()['fps']
+            
+            # Suppress verbose imageio/ffmpeg warnings about frame rate estimation
+            import warnings
+            with warnings.catch_warnings():
+                warnings.filterwarnings("ignore", category=UserWarning)
+                reader = imageio.get_reader(video_path)
+                fps = reader.get_meta_data()['fps']
+            
             output_fps = fps * interpolation_factor
+            print(f"Input: {fps:.2f} FPS → Output: {output_fps:.2f} FPS")
             if use_streaming and speed_factor != 1.0:
                 print("Note: Speed adjustment is ignored in RIFE streaming mode.")
                 speed_factor = 1.0
@@ -413,28 +496,60 @@ class ToolboxProcessor:
                 writer.close()
             else:
                 frames = [frame for frame in reader]
+                print(f"Loaded {len(frames)} frames from video")
+                
+                # Check if we have enough frames
+                if len(frames) < 2:
+                    print("WARNING: Video has less than 2 frames. Cannot interpolate.")
+                    reader.close()
+                    return video_path
+                
                 processed_frames = frames
                 if speed_factor != 1.0:
                     print(f"Adjusting speed by {speed_factor}x (in-memory)...")
                     new_len = int(len(frames) / speed_factor)
                     indices = np.linspace(0, len(frames) - 1, new_len).astype(int)
                     processed_frames = [frames[i] for i in indices]
+                    print(f"Speed adjustment: {len(frames)} → {len(processed_frames)} frames")
+                
                 if should_interpolate and len(processed_frames) > 1:
                     self.rife_handler._ensure_model_downloaded_and_loaded()
                     num_passes = int(math.log2(interpolation_factor))
                     for p in range(num_passes):
                         print(f"INFO: Starting RIFE interpolation pass {p + 1}/{num_passes}...")
+                        print(f"      Input frames: {len(processed_frames)}")
                         interpolated_this_pass = []
                         desc = f"RIFE Pass {p+1}/{num_passes}"
                         frame_iterator = progress.tqdm(range(len(processed_frames) - 1), desc=desc)
+                        failed_interpolations = 0
                         for i in frame_iterator:
                             interpolated_this_pass.append(processed_frames[i])
                             middle = self.rife_handler.interpolate_between_frames(processed_frames[i], processed_frames[i+1])
-                            interpolated_this_pass.append(middle if middle is not None else processed_frames[i])
+                            if middle is not None:
+                                interpolated_this_pass.append(middle)
+                            else:
+                                interpolated_this_pass.append(processed_frames[i])  # Fallback to original frame
+                                failed_interpolations += 1
                         interpolated_this_pass.append(processed_frames[-1])
                         processed_frames = interpolated_this_pass
+                        print(f"      Output frames: {len(processed_frames)}")
+                        if failed_interpolations > 0:
+                            print(f"      WARNING: {failed_interpolations} frame interpolations failed (used fallback frames)")
                 temp_video_path = self._generate_output_path(video_path, "frames_temp", is_temp=True)
-                imageio.mimwrite(temp_video_path, processed_frames, fps=output_fps, quality=output_quality)
+                print(f"Writing {len(processed_frames)} frames to video...")
+                
+                # Suppress verbose imageio/ffmpeg warnings during video writing
+                import warnings
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("ignore")
+                    # Use ffmpeg_params to suppress verbose output
+                    imageio.mimwrite(
+                        temp_video_path, 
+                        processed_frames, 
+                        fps=output_fps, 
+                        quality=output_quality,
+                        ffmpeg_params=['-loglevel', 'error']  # Only show errors, not warnings
+                    )
             reader.close()
 
             # --- Suffix and Final Path Generation ---
@@ -499,6 +614,9 @@ class ToolboxProcessor:
             print("Loop type 'none'. No action.")
             return video_path
 
+        # Normalize input path to prevent filename length issues
+        video_path = self._normalize_input_path(video_path)
+        
         progress(0, desc="Initializing loop creation...")
         resolved_video_path = str(Path(video_path).resolve())
         output_path = self._generate_output_path(
@@ -604,6 +722,10 @@ class ToolboxProcessor:
     def export_video(self, video_path, export_format, quality, max_width, output_name, two_pass=False, progress=gr.Progress()):
         if not video_path: print("No input video to export."); return None
         if not self.has_ffmpeg: print("FFmpeg is required for export."); return None
+        
+        # Normalize input path to prevent filename length issues
+        video_path = self._normalize_input_path(video_path)
+        
         print(f"Exporting video to {export_format} with quality {quality} and max width {max_width}px (Two-pass: {two_pass}).")
         try:
             # Determine file extension based on format

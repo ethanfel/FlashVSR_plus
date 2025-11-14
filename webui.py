@@ -195,28 +195,42 @@ def list_images_natural(folder: str):
     fs.sort(key=natural_key)
     return fs
 
-def clean_image_filename(filename, max_length=20):
+def clean_video_filename(filename, max_length=80):
     """
-    Cleans and truncates image filenames to prevent path length issues.
-    - Removes preprocessing suffixes (_resized_, _preprocessed_, etc.)
-    - Removes timestamps from preprocessing steps
+    Cleans video filenames to prevent path length issues while preserving operation chain.
+    - KEEPS preprocessing suffixes (_resized_, _trim_, _preprocessed_) to show operation history
+    - REMOVES timestamps from preprocessing steps to prevent length accumulation
+    - Truncates to max_length characters while preserving readability
+    """
+    # Remove timestamps from preprocessing (format: _YYYYMMDD_HHMMSS or _HHMMSS)
+    # These accumulate with each operation and cause length issues
+    filename = re.sub(r'_\d{8}_\d{6}', '', filename)
+    filename = re.sub(r'_\d{6}', '', filename)
+    
+    # Clean up multiple underscores that may result from timestamp removal
+    filename = re.sub(r'_+', '_', filename)
+    filename = filename.strip('_')
+    
+    # Truncate to max_length while preserving some readability
+    if len(filename) > max_length:
+        # Keep the first max_length characters
+        filename = filename[:max_length]
+        # Remove trailing underscore if present
+        filename = filename.rstrip('_')
+    
+    return filename
+
+def clean_image_filename(filename, max_length=80):
+    """
+    Cleans image filenames to prevent path length issues while preserving operation chain.
+    - KEEPS preprocessing suffixes (_resized_, _preprocessed_) to show operation history
+    - REMOVES timestamps from preprocessing steps to prevent length accumulation
     - Truncates to max_length characters
     """
-    # Remove preprocessing suffixes that accumulate
-    preprocessing_patterns = [
-        r'_resized_\d+x\d+',  # _resized_320x210
-        r'_preprocessed',
-        r'_input_upscaled',
-        r'_input_resized',
-    ]
-    
-    for pattern in preprocessing_patterns:
-        filename = re.sub(pattern, '', filename)
-    
     # Remove timestamps from preprocessing (format: _YYYYMMDD_HHMMSS)
     filename = re.sub(r'_\d{8}_\d{6}', '', filename)
     
-    # Clean up multiple underscores
+    # Clean up multiple underscores that may result from timestamp removal
     filename = re.sub(r'_+', '_', filename)
     filename = filename.strip('_')
     
@@ -686,6 +700,7 @@ def run_flashvsr_single(
 
     # --- Output Path ---
     input_basename = os.path.splitext(os.path.basename(input_path))[0]
+    input_basename = clean_video_filename(input_basename)  # Clean filename to prevent length issues
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     output_filename = f"{input_basename}_{mode}_s{scale}_{timestamp}.mp4"
     output_path = os.path.join(OUTPUT_DIR, output_filename)
@@ -1182,6 +1197,7 @@ def resize_input_image(image_path, max_width, progress=gr.Progress()):
         
         # Generate output path in temp directory
         input_basename = os.path.splitext(os.path.basename(image_path))[0]
+        input_basename = clean_image_filename(input_basename)  # Clean filename to prevent length issues
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         ext = os.path.splitext(image_path)[1] or '.png'
         output_filename = f"{input_basename}_resized_{new_width}x{new_height}_{timestamp}{ext}"
@@ -1757,6 +1773,7 @@ def resize_input_video(video_path, max_width, progress=gr.Progress()):
         
         # Generate output path in temp directory
         input_basename = os.path.splitext(os.path.basename(video_path))[0]
+        input_basename = clean_video_filename(input_basename)  # Clean filename to prevent length issues
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         output_filename = f"{input_basename}_resized_{new_width}x{new_height}_{timestamp}.mp4"
         output_path = os.path.join(TEMP_DIR, output_filename)
@@ -1949,6 +1966,7 @@ def save_preprocessed_video(video_path, progress=gr.Progress()):
         
         # Generate output filename with timestamp
         input_basename = os.path.splitext(os.path.basename(video_path))[0]
+        input_basename = clean_video_filename(input_basename)  # Clean filename to prevent length issues
         timestamp = time.strftime("%H%M%S")
         output_filename = f"{input_basename}_preprocessed_{timestamp}.mp4"
         output_path = os.path.join(preprocessed_dir, output_filename)
@@ -1999,6 +2017,7 @@ def trim_video(video_path, start_time, end_time, progress=gr.Progress()):
         progress(0.1, desc="Trimming video...")
         
         input_basename = os.path.splitext(os.path.basename(video_path))[0]
+        input_basename = clean_video_filename(input_basename)  # Clean filename to prevent length issues
         timestamp = time.strftime("%Y%m%d_%H%M%S")
         output_filename = f"{input_basename}_trim_{start_time:.0f}-{end_time:.0f}s_{timestamp}.mp4"
         output_path = os.path.join(TEMP_DIR, output_filename)
@@ -2232,6 +2251,7 @@ def process_video_with_chunks(
     # Step 2: Process each chunk (model reloaded each time for clean state)
     processed_chunks = []
     input_basename = os.path.splitext(os.path.basename(input_path))[0]
+    input_basename = clean_video_filename(input_basename)  # Clean filename to prevent length issues
     
     for i, chunk_path in enumerate(chunk_paths):
         chunk_progress_start = 0.1 + (i / num_chunks) * 0.8
@@ -2641,8 +2661,8 @@ def create_ui():
                                 create_comparison_checkbox = gr.Checkbox(label="Create Comparison Video", value=False, info="Side-by-side before/after. Always saved. Not available for chunked/batch jobs.")
                                 clear_on_start_checkbox = gr.Checkbox(label="Clear Temp on Start", value=config.get("clear_temp_on_start", False))
                             with gr.Row():                                
-                                open_folder_button = gr.Button("Open Output Folder", size="sm")
-                                # clear_temp_button = gr.Button("Clear Temp Files", size="sm", variant="secondary")
+                                open_folder_button = gr.Button("Open Output Folder", size="sm", variant="huggingface")
+                                clear_temp_button = gr.Button("⚠️ Clear Temp Files", size="sm", variant="stop")
                         with gr.Row():
                             save_status = gr.HTML(
                                 value=random.choice(IDLE_STATES),
@@ -2852,7 +2872,8 @@ def create_ui():
                                 img_create_comparison = gr.Checkbox(label="Create Comparison Image", value=False, info="Side-by-side before/after. Always saved.")
                                 img_clear_on_start = gr.Checkbox(label="Clear Temp on Start", value=config.get("clear_temp_on_start", False), visible=False)
                             with gr.Row():
-                                img_open_folder_button = gr.Button("Open Output Folder", size="sm")
+                                img_open_folder_button = gr.Button("Open Output Folder", size="sm", variant="huggingface")
+                                img_clear_temp_button = gr.Button("⚠️ Clear Temp Files", size="sm", variant="stop")
                         
                         with gr.Row():
                             img_save_status = gr.HTML(
@@ -3008,11 +3029,11 @@ def create_ui():
 
                         # --- Settings & File Management Group ---
                         with gr.Group():
-                            tb_open_folder_btn = gr.Button("📁 Open Outputs", scale=1, size="sm")
+                            with gr.Row():
+                                tb_open_folder_btn = gr.Button("Open Output Folder", size="sm", variant="huggingface")
+                                tb_clear_temp_btn = gr.Button("⚠️ Clear Temp Files", size="sm", variant="stop")                                
                             with gr.Row():
                                 tb_autosave_checkbox = gr.Checkbox(label="Autosave", scale=1, value=initial_autosave_state)
-                            # with gr.Row():                               
-                                # tb_clear_temp_btn = gr.Button("🗑️ Clear Temp", size="sm", scale=1, variant="stop")
                             with gr.Row():
                                 frames_output_quality = gr.Slider(
                                     minimum=1, maximum=10, step=1, value=8, label="Master Output Quality",
@@ -3074,12 +3095,13 @@ def create_ui():
                                     export_two_pass = gr.Checkbox(
                                         label="Two-Pass Encoding",
                                         value=False,
+                                        visible=False,  # temporarily hiding due to issues with longer videos
                                         info="10-20% better compression at same quality. Slower but more efficient. Recommended for Discord/file size limits."
                                     )
                                 with gr.Column(scale=2):
                                     export_resize_slider = gr.Slider(
-                                        256, 2048, value=1024, step=64, label="Max Width (pixels)",
-                                        info="Resizes the video to this maximum width while maintaining aspect ratio. A powerful way to reduce file size."
+                                        256, 3840, value=1920, step=64, label="Max Width (pixels)",
+                                        info="Resizes the video _down_ to this maximum width while maintaining aspect ratio. A powerful way to reduce file size. No change if targeted width > current."
                                     )
                                     export_name_input = gr.Textbox(
                                         label="Output Filename (optional)",
@@ -3167,6 +3189,22 @@ def create_ui():
         open_folder_button.click(
             fn=lambda: open_folder(OUTPUT_DIR), 
             inputs=[], 
+            outputs=[save_status]
+        ).then(
+            fn=do_sleep,
+            inputs=None,
+            outputs=None,
+            show_progress="hidden"
+        ).then(
+            fn=do_clear,
+            inputs=None,
+            outputs=[save_status],
+            show_progress="hidden"
+        )
+        
+        clear_temp_button.click(
+            fn=clear_temp_files,
+            inputs=[],
             outputs=[save_status]
         ).then(
             fn=do_sleep,
@@ -3710,17 +3748,48 @@ def create_ui():
         def open_images_folder():
             images_folder = os.path.join(OUTPUT_DIR, "images")
             os.makedirs(images_folder, exist_ok=True)
-            if sys.platform == "win32":
-                os.startfile(images_folder)
-            elif sys.platform == "darwin":
-                subprocess.Popen(["open", images_folder])
-            else:
-                subprocess.Popen(["xdg-open", images_folder])
-        
+            try:
+                if sys.platform == "win32":
+                    os.startfile(images_folder)
+                elif sys.platform == "darwin":
+                    subprocess.Popen(["open", images_folder])
+                else:
+                    subprocess.Popen(["xdg-open", images_folder])
+                return f'<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Opened folder: {images_folder}</div>'
+            except Exception as e:
+                return f'<div style="padding: 1px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24;">❌ Error opening folder: {e}</div>'
+
+
         img_open_folder_button.click(
             fn=open_images_folder,
             inputs=[],
-            outputs=[]
+            outputs=[img_save_status]
+        ).then(
+            fn=do_sleep,
+            inputs=None,
+            outputs=None,
+            show_progress="hidden"
+        ).then(
+            fn=do_clear,
+            inputs=None,
+            outputs=[img_save_status],
+            show_progress="hidden"
+        )
+        
+        img_clear_temp_button.click(
+            fn=clear_temp_files,
+            inputs=[],
+            outputs=[img_save_status]
+        ).then(
+            fn=do_sleep,
+            inputs=None,
+            outputs=None,
+            show_progress="hidden"
+        ).then(
+            fn=do_clear,
+            inputs=None,
+            outputs=[img_save_status],
+            show_progress="hidden"
         )
         
         # Autosave checkbox change handler
@@ -3763,6 +3832,13 @@ def create_ui():
             fn=toolbox_processor.open_output_folder, 
             outputs=[tb_status_message]
         )
+        
+        tb_clear_temp_btn.click(
+            fn=lambda: clear_temp_files(),
+            inputs=[],
+            outputs=[tb_status_message]
+        )
+        
         def handle_autosave_toggle(is_enabled):
             # Update toolbox processor
             message = toolbox_processor.set_autosave_mode(is_enabled)
