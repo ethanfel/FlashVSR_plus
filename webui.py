@@ -1244,6 +1244,7 @@ def run_flashvsr_batch_image(
     kv_ratio,
     local_range,
     create_comparison,
+    batch_resize_preset,
     progress=gr.Progress(track_tqdm=True)
 ):
     """Processes a batch of images through FlashVSR, saving all to a timestamped subfolder."""
@@ -1254,6 +1255,8 @@ def run_flashvsr_batch_image(
     total_images = len(input_paths)
     
     log(f"Starting batch processing for {total_images} images...", message_type='info')
+    if batch_resize_preset != "No Resize":
+        log(f"Batch resize preset: {batch_resize_preset}", message_type='info')
     
     # Create batch subfolder with timestamp in images folder
     batch_folder_name = f"batch_{time.strftime('%Y%m%d_%H%M%S')}"
@@ -1271,6 +1274,29 @@ def run_flashvsr_batch_image(
             progress(batch_progress, desc=f"Batch: Processing image {i+1}/{total_images}: {os.path.basename(image_path)}")
             log(f"\n--- Processing image {i+1}/{total_images}: {os.path.basename(image_path)} ---", message_type='info')
             batch_messages.append(f"\n--- Image {i+1}/{total_images}: {os.path.basename(image_path)} ---")
+            
+            # Apply batch resize if preset is selected
+            processed_image_path = image_path
+            if batch_resize_preset != "No Resize":
+                # Extract width from preset (e.g., "512px" -> 512)
+                max_width = int(batch_resize_preset.replace("px", ""))
+                current_width, current_height = get_image_dimensions(image_path)
+                
+                # Only resize if image is wider than preset
+                if current_width > max_width:
+                    log(f"Resizing image from {current_width}px to {max_width}px width...", message_type='info')
+                    batch_messages.append(f"  Resizing: {current_width}px → {max_width}px")
+                    
+                    class DummyProgress:
+                        def __call__(self, *args, **kwargs):
+                            pass
+                    
+                    processed_image_path = resize_input_image(image_path, max_width, progress=DummyProgress())
+                else:
+                    log(f"Image width ({current_width}px) ≤ preset ({max_width}px), skipping resize", message_type='info')
+                    batch_messages.append(f"  No resize needed ({current_width}px)")
+            
+            image_path = processed_image_path
             
             # Create a dummy progress object that doesn't interfere with batch progress
             class DummyProgress:
@@ -1521,6 +1547,7 @@ def run_flashvsr_batch(
     sparse_ratio,
     kv_ratio,
     local_range,
+    batch_resize_preset,
     progress=gr.Progress(track_tqdm=True)
 ):
     """Processes a batch of videos through FlashVSR, saving all to a timestamped subfolder."""
@@ -1531,6 +1558,8 @@ def run_flashvsr_batch(
     total_videos = len(input_paths)
     
     log(f"Starting batch processing for {total_videos} videos...", message_type='info')
+    if batch_resize_preset != "No Resize":
+        log(f"Batch resize preset: {batch_resize_preset}", message_type='info')
     
     # Create batch subfolder with timestamp
     batch_folder_name = f"batch_{time.strftime('%Y%m%d_%H%M%S')}"
@@ -1547,6 +1576,29 @@ def run_flashvsr_batch(
             progress(batch_progress, desc=f"Batch: Processing video {i+1}/{total_videos}: {os.path.basename(video_path)}")
             log(f"\n--- Processing video {i+1}/{total_videos}: {os.path.basename(video_path)} ---", message_type='info')
             batch_messages.append(f"\n--- Video {i+1}/{total_videos}: {os.path.basename(video_path)} ---")
+            
+            # Apply batch resize if preset is selected
+            processed_video_path = video_path
+            if batch_resize_preset != "No Resize":
+                # Extract width from preset (e.g., "512px" -> 512)
+                max_width = int(batch_resize_preset.replace("px", ""))
+                current_width, current_height = get_video_dimensions(video_path)
+                
+                # Only resize if video is wider than preset
+                if current_width > max_width:
+                    log(f"Resizing video from {current_width}px to {max_width}px width...", message_type='info')
+                    batch_messages.append(f"  Resizing: {current_width}px → {max_width}px")
+                    
+                    class DummyProgress:
+                        def __call__(self, *args, **kwargs):
+                            pass
+                    
+                    processed_video_path = resize_input_video(video_path, max_width, progress=DummyProgress())
+                else:
+                    log(f"Video width ({current_width}px) ≤ preset ({max_width}px), skipping resize", message_type='info')
+                    batch_messages.append(f"  No resize needed ({current_width}px)")
+            
+            video_path = processed_video_path
             
             # Create a dummy progress object that doesn't interfere with batch progress
             class DummyProgress:
@@ -2505,15 +2557,55 @@ css = """
     display: none !important;
 }
 
-/* Compact monitor styling */
-.monitor-compact textarea {
+/* Enhanced Monitor Textboxes - No flashing, better styling */
+.monitor-box {
     min-width: 0 !important;
-    font-size: 0.9em !important;
-    padding: 2px !important;
 }
 
-.monitor-compact {
-    min-width: 0 !important;
+.monitor-box textarea {
+    font-family: 'Consolas', 'Monaco', 'Courier New', monospace !important;
+    font-size: 0.85em !important;
+    line-height: 1.6 !important;
+    padding: 12px !important;
+    border-radius: 8px !important;
+    border: 1px solid #e2e8f0 !important;
+    background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%) !important;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06) !important;
+    resize: none !important;
+    font-weight: 500 !important;
+}
+
+.gpu-monitor textarea {
+    border-left: 3px solid #667eea !important;
+    background: linear-gradient(135deg, #667eea08 0%, #ffffff 100%) !important;
+}
+
+.cpu-monitor textarea {
+    border-left: 3px solid #f5576c !important;
+    background: linear-gradient(135deg, #f5576c08 0%, #ffffff 100%) !important;
+}
+
+.monitor-box textarea:focus {
+    outline: none !important;
+    border-color: #667eea !important;
+    box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1) !important;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+    .monitor-box textarea {
+        background: linear-gradient(135deg, #1a202c 0%, #2d3748 100%) !important;
+        border-color: #4a5568 !important;
+        color: #e2e8f0 !important;
+    }
+    
+    .gpu-monitor textarea {
+        background: linear-gradient(135deg, #667eea15 0%, #2d3748 100%) !important;
+    }
+    
+    .cpu-monitor textarea {
+        background: linear-gradient(135deg, #f5576c15 0%, #2d3748 100%) !important;
+    }
 }
 """
     
@@ -2600,6 +2692,18 @@ def create_ui():
                                     label="Folder Path",
                                     show_label=False
                                 )
+                                
+                                # Batch resize preset
+                                gr.Markdown("---")
+                                gr.Markdown('<span style="font-size: 0.9em; color: #666;">📐 **Batch Resize Preset** - Automatically resize videos wider than selected width</span>')
+                                batch_resize_preset = gr.Dropdown(
+                                    choices=["No Resize", "512px", "768px", "1024px", "1280px", "1920px"],
+                                    value="No Resize",
+                                    label="Resize Width Preset",
+                                    info="Only resizes if video width > preset. Maintains aspect ratio.",
+                                    interactive=True
+                                )
+                                
                                 batch_run_button = gr.Button("Start Batch Processing", variant="primary", size="sm")
                         
                         # Video Pre-Processing Accordion
@@ -2745,14 +2849,16 @@ def create_ui():
                                     lines=4,
                                     container=False,
                                     interactive=False,
-                                    elem_classes="monitor-compact"
+                                    show_label=False,
+                                    elem_classes="monitor-box gpu-monitor"
                                 )
                             with gr.Column(scale=1, min_width=200):
                                 cpu_monitor = gr.Textbox(
-                                    lines=2,
+                                    lines=4,
                                     container=False,
                                     interactive=False,
-                                    elem_classes="monitor-compact"
+                                    show_label=False,
+                                    elem_classes="monitor-box cpu-monitor"
                                 )
                         
                         # Output Analysis Display
@@ -2862,6 +2968,18 @@ def create_ui():
                                     label="Folder Path",
                                     show_label=False
                                 )
+                                
+                                # Batch resize preset
+                                gr.Markdown("---")
+                                gr.Markdown('<span style="font-size: 0.9em; color: #666;">📐 **Batch Resize Preset** - Automatically resize images wider than selected width</span>')
+                                img_batch_resize_preset = gr.Dropdown(
+                                    choices=["No Resize", "512px", "768px", "1024px", "1280px", "1920px"],
+                                    value="No Resize",
+                                    label="Resize Width Preset",
+                                    info="Only resizes if image width > preset. Maintains aspect ratio.",
+                                    interactive=True
+                                )
+                                
                                 img_batch_run_button = gr.Button("Start Batch Processing", variant="primary", size="sm")
                         
                         # Image Pre-Processing Accordion
@@ -2964,14 +3082,16 @@ def create_ui():
                                     lines=4,
                                     container=False,
                                     interactive=False,
-                                    elem_classes="monitor-compact"
+                                    show_label=False,
+                                    elem_classes="monitor-box gpu-monitor"
                                 )
                             with gr.Column(scale=1, min_width=200):
                                 img_cpu_monitor = gr.Textbox(
-                                    lines=2,
+                                    lines=4,
                                     container=False,
                                     interactive=False,
-                                    elem_classes="monitor-compact"
+                                    show_label=False,
+                                    elem_classes="monitor-box cpu-monitor"
                                 )
                         
                         # Output Analysis Display
@@ -3593,7 +3713,7 @@ def create_ui():
         def handle_batch_processing(
             batch_files, folder_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size, tile_overlap,
             unload_dit, dtype_str, seed, device, fps_override, quality, attention_mode,
-            sparse_ratio, kv_ratio, local_range
+            sparse_ratio, kv_ratio, local_range, batch_resize_preset
         ):
             # Collect input paths from either files or folder
             input_paths = []
@@ -3611,7 +3731,7 @@ def create_ui():
             last_video, status_msg = run_flashvsr_batch(
                 input_paths, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size, tile_overlap,
                 unload_dit, dtype_str, seed, device, fps_override, quality, attention_mode,
-                sparse_ratio, kv_ratio, local_range
+                sparse_ratio, kv_ratio, local_range, batch_resize_preset
             )
             # Return the last processed video for that final dramatic reveal!
             status_msg = '<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Batch processing complete!</div>'
@@ -3635,7 +3755,7 @@ def create_ui():
                 flashvsr_batch_input_files, batch_folder_path, mode_radio, model_version_radio, scale_slider, color_fix_checkbox, tiled_vae_checkbox,
                 tiled_dit_checkbox, tile_size_slider, tile_overlap_slider, unload_dit_checkbox,
                 dtype_radio, seed_number, device_textbox, fps_number, quality_slider, attention_mode_radio,
-                sparse_ratio_slider, kv_ratio_slider, local_range_slider
+                sparse_ratio_slider, kv_ratio_slider, local_range_slider, batch_resize_preset
             ],
             outputs=[video_output, output_file_path, video_slider_output, completion_status]
         ).then(
@@ -3801,7 +3921,7 @@ def create_ui():
         def handle_img_batch_processing(
             batch_files, folder_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size, tile_overlap,
             unload_dit, dtype_str, seed, device, fps_override, quality, attention_mode,
-            sparse_ratio, kv_ratio, local_range, create_comparison
+            sparse_ratio, kv_ratio, local_range, create_comparison, batch_resize_preset
         ):
             # Collect input paths from either files or folder
             input_paths = []
@@ -3819,7 +3939,7 @@ def create_ui():
             return run_flashvsr_batch_image(
                 input_paths, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size, tile_overlap,
                 unload_dit, dtype_str, seed, device, fps_override, quality, attention_mode,
-                sparse_ratio, kv_ratio, local_range, create_comparison
+                sparse_ratio, kv_ratio, local_range, create_comparison, batch_resize_preset
             )
         
         # Batch image run button click
@@ -3838,7 +3958,7 @@ def create_ui():
                 img_tiled_vae, img_tiled_dit, img_tile_size, img_tile_overlap,
                 img_unload_dit, img_dtype, img_seed, img_device, img_fps,
                 img_quality, img_attention_mode, img_sparse_ratio, img_kv_ratio,
-                img_local_range, img_create_comparison
+                img_local_range, img_create_comparison, img_batch_resize_preset
             ],
             outputs=[img_output, img_batch_status, completion_status]
         ).then(

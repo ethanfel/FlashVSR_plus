@@ -238,6 +238,58 @@ class SystemMonitor:
         except:
             return False
 
+    @staticmethod
+    def get_cpu_temperature() -> Optional[float]:
+        """Get CPU temperature. Returns None if unavailable."""
+        try:
+            # Try psutil sensors (Linux, some Windows setups)
+            if hasattr(psutil, "sensors_temperatures"):
+                temps = psutil.sensors_temperatures()
+                if temps:
+                    # Try common sensor names
+                    for name in ['coretemp', 'k10temp', 'zenpower', 'cpu_thermal', 'cpu-thermal']:
+                        if name in temps:
+                            entries = temps[name]
+                            if entries:
+                                # Return the first current temperature
+                                return entries[0].current
+                    
+                    # Fallback: return first available temperature
+                    for sensor_name, entries in temps.items():
+                        if entries and entries[0].current > 0:
+                            return entries[0].current
+            
+            # Windows: Try WMI (requires wmi package, but we'll skip if not available)
+            if platform.system() == "Windows":
+                try:
+                    import wmi
+                    w = wmi.WMI(namespace="root\\wmi")
+                    temperature_info = w.MSAcpi_ThermalZoneTemperature()[0]
+                    # Convert from tenths of Kelvin to Celsius
+                    temp_kelvin = temperature_info.CurrentTemperature / 10.0
+                    return temp_kelvin - 273.15
+                except:
+                    pass
+            
+            # macOS: Try sysctl (requires subprocess)
+            if platform.system() == "Darwin":
+                try:
+                    result = subprocess.check_output(
+                        ["sysctl", "-n", "machdep.xcpm.cpu_thermal_level"],
+                        encoding='utf-8',
+                        timeout=0.5,
+                        stderr=subprocess.DEVNULL
+                    )
+                    # This returns a thermal level (0-100), not actual temp
+                    # We'll skip this as it's not a real temperature
+                except:
+                    pass
+            
+        except Exception:
+            pass
+        
+        return None
+
     @classmethod
     def get_system_info(cls) -> str:
         """Get detailed system status with support for different GPU types."""
@@ -254,63 +306,79 @@ class SystemMonitor:
             elif cls.is_amd_gpu(): # Check for AMD (works on Linux, might need refinement for Windows if not using PyTorch ROCm)
                 gpu_name_display, metrics, gpu_warning = cls.get_amd_gpu_info()
             else: # No specific GPU detected by these primary checks
-                # Could add a PyTorch ROCm check here if desired for AMD on Windows/Linux without rocm-smi
-                # if hasattr(torch, 'rocm_is_available') and torch.rocm_is_available():
-                # gpu_name_display = "AMD GPU (via PyTorch ROCm)"
-                # metrics = { ... basic torch.rocm metrics ... }
                 pass
 
-
-            # Format GPU info based on available metrics
+            # Format GPU info with better visual structure
             if gpu_name_display:
-                gpu_info_lines = [f"🎮 GPU: {gpu_name_display}"]
+                # Truncate long GPU names for better display
+                if len(gpu_name_display) > 30:
+                    gpu_name_display = gpu_name_display[:27] + "..."
                 
-                # Standard memory reporting with brain emoji
+                gpu_info_lines = [f"╔═ {gpu_name_display}"]
+                
+                # Memory with visual bar
                 if 'memory_used_gb' in metrics and 'memory_total_gb' in metrics:
-                    mem_label = "GPU Memory"
-                    if platform.system() == "Darwin" and platform.processor() == "arm":
-                        mem_label = "Unified Memory" # For Apple Silicon
+                    mem_used = metrics.get('memory_used_gb', 0.0)
+                    mem_total = metrics.get('memory_total_gb', 0.0)
+                    mem_pct = (mem_used / mem_total * 100) if mem_total > 0 else 0
                     
-                    gpu_info_lines.append(
-                        f"🧠 {mem_label}: {metrics.get('memory_used_gb', 0.0):.1f}GB / {metrics.get('memory_total_gb', 0.0):.1f}GB"
-                    )
-
-                # VRAM Reserved (NVIDIA specific from nvidia-smi, or placeholder)
-                # if 'memory_reserved_gb' in metrics and torch.cuda.is_available() and not (platform.system() == "Darwin"): # Show for NVIDIA, not Mac
-                    # gpu_info_lines.append(f"💾 VRAM Reserved: {metrics.get('memory_reserved_gb', 0.0):.1f}GB")
+                    # Create text-based bar with dots background
+                    bar_length = 20
+                    filled = int(bar_length * mem_pct / 100)
+                    bar = '●' * filled + '·' * (bar_length - filled)
+                    
+                    mem_label = "VRAM" if torch.cuda.is_available() else "Memory"
+                    gpu_info_lines.append(f"║ {mem_label}: {mem_used:.1f}/{mem_total:.1f}GB [{bar}] {mem_pct:.0f}%")
                 
-                if 'temperature' in metrics and metrics.get('temperature', 0.0) > 0: # Only show if temp is valid
-                    gpu_info_lines.append(f"🌡️ GPU Temp: {metrics.get('temperature', 0.0):.0f}°C")
+                if 'temperature' in metrics and metrics.get('temperature', 0.0) > 0:
+                    temp = metrics.get('temperature', 0.0)
+                    gpu_info_lines.append(f"║ Temp: {temp:.0f}°C")
                 
                 if 'utilization' in metrics:
-                    gpu_info_lines.append(f"⚡ GPU Load: {metrics.get('utilization', 0.0):.0f}%")
+                    util = metrics.get('utilization', 0.0)
+                    gpu_info_lines.append(f"╚═ Load: {util:.0f}%")
+                else:
+                    gpu_info_lines[-1] = gpu_info_lines[-1].replace('║', '╚═')
                 
-                if gpu_warning: # Display any warning from the GPU info functions
-                    gpu_info_lines.append(f"⚠️ {gpu_warning}")
+                if gpu_warning:
+                    gpu_info_lines.append(f"⚠ {gpu_warning[:40]}")
                     
-                gpu_section = "\n".join(gpu_info_lines) + "\n\n"  # Added extra newline for spacing
+                gpu_section = "\n".join(gpu_info_lines)
             else:
-                gpu_section = "🎮 GPU: No dedicated GPU detected or supported\n\n"  # Added extra newline
+                gpu_section = "╔═ No GPU Detected\n╚═ Using CPU"
             
-            # Get CPU info - reordered: CPU → RAM → Usage
-            cpu_count = psutil.cpu_count(logical=False) # Physical cores
-            cpu_threads = psutil.cpu_count(logical=True) # Logical processors
-            cpu_info = f"💻 CPU: {cpu_count or 'N/A'} Cores, {cpu_threads or 'N/A'} Threads\n"
+            # Format CPU/RAM info with better structure
+            cpu_count = psutil.cpu_count(logical=False)
+            cpu_threads = psutil.cpu_count(logical=True)
             
-            # Get RAM info with brain emoji
             ram = psutil.virtual_memory()
             ram_used_gb = ram.used / (1024**3)
             ram_total_gb = ram.total / (1024**3)
-            ram_info = f"🧠 RAM: {ram_used_gb:.1f}GB / {ram_total_gb:.1f}GB ({ram.percent}%)\n"
+            ram_pct = ram.percent
             
-            cpu_usage = f"⚡ CPU Usage: {psutil.cpu_percent()}%"
+            # RAM bar with dots background
+            bar_length = 20
+            filled = int(bar_length * ram_pct / 100)
+            ram_bar = '●' * filled + '·' * (bar_length - filled)
             
-            # Return as tuple: (gpu_info, cpu_info)
-            cpu_section = f"{ram_info}{cpu_usage}"
-            return (gpu_section.strip(), cpu_section.strip())
+            cpu_usage = psutil.cpu_percent()
+            cpu_temp = cls.get_cpu_temperature()
+            
+            cpu_lines = [
+                f"╔═ CPU: {cpu_count}C/{cpu_threads}T",
+                f"║ RAM: {ram_used_gb:.1f}/{ram_total_gb:.1f}GB [{ram_bar}] {ram_pct:.0f}%",
+            ]
+            
+            # Add CPU temp if available
+            if cpu_temp is not None and cpu_temp > 0:
+                cpu_lines.append(f"║ Temp: {cpu_temp:.0f}°C")
+            
+            cpu_lines.append(f"╚═ Usage: {cpu_usage:.0f}%")
+            
+            cpu_section = "\n".join(cpu_lines)
+            
+            return (gpu_section, cpu_section)
             
         except Exception as e:
-            # print(f"Overall error in get_system_info: {e}")
-            # import traceback; print(traceback.format_exc())
-            error_msg = f"Error collecting system info: {str(e)}"
+            error_msg = f"Error: {str(e)[:30]}"
             return (error_msg, "")
