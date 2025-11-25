@@ -67,13 +67,26 @@ parser.add_argument("--port", type=int, default=7860, help="Service Port")
 args = parser.parse_args()
         
 ROOT_DIR = os.path.dirname(os.path.abspath(__file__))
-OUTPUT_DIR = os.path.join(ROOT_DIR, "outputs")
+DEFAULT_OUTPUT_DIR = os.path.join(ROOT_DIR, "outputs")
 TEMP_DIR = os.path.join(ROOT_DIR, "_temp")
 CONFIG_FILE = os.path.join(ROOT_DIR, "webui_config")
 os.environ['GRADIO_TEMP_DIR'] = TEMP_DIR
 
-os.makedirs(OUTPUT_DIR, exist_ok=True)
+os.makedirs(DEFAULT_OUTPUT_DIR, exist_ok=True)
 os.makedirs(TEMP_DIR, exist_ok=True)
+
+def get_output_dir():
+    """Get the current output directory from config, or default if not set."""
+    config = load_config()
+    custom_dir = config.get("output_dir", "").strip()
+    if custom_dir and os.path.isabs(custom_dir):
+        os.makedirs(custom_dir, exist_ok=True)
+        return custom_dir
+    return DEFAULT_OUTPUT_DIR
+
+# For backward compatibility, OUTPUT_DIR is now a function call
+# Use get_output_dir() throughout the code for dynamic resolution
+OUTPUT_DIR = DEFAULT_OUTPUT_DIR  # Initial value, will be updated dynamically
 
 def load_config():
     """Load user preferences from config file."""
@@ -601,6 +614,7 @@ def save_file_manually(temp_path):
         return '<div style="padding: 1px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 1px; color: #721c24;">❌ No file to save.</div>'
     
     filename = os.path.basename(temp_path)
+    output_dir = get_output_dir()
     
     # Determine if it's an image or video based on extension
     ext = os.path.splitext(filename)[1].lower()
@@ -608,11 +622,11 @@ def save_file_manually(temp_path):
     
     # Save to appropriate subfolder
     if is_image:
-        images_output_dir = os.path.join(OUTPUT_DIR, "images")
+        images_output_dir = os.path.join(output_dir, "images")
         os.makedirs(images_output_dir, exist_ok=True)
         final_path = os.path.join(images_output_dir, filename)
     else:
-        final_path = os.path.join(OUTPUT_DIR, filename)
+        final_path = os.path.join(output_dir, filename)
     
     try:
         shutil.copy(temp_path, final_path)
@@ -709,9 +723,10 @@ def run_flashvsr_single(
     input_basename = clean_video_filename(input_basename)  # Clean filename to prevent length issues
     timestamp = time.strftime("%Y%m%d-%H%M%S")
     output_filename = f"{input_basename}_{mode}_s{scale}_{timestamp}.mp4"
-    output_path = os.path.join(OUTPUT_DIR, output_filename)
+    output_dir = get_output_dir()
+    output_path = os.path.join(output_dir, output_filename)
     temp_video_path = os.path.join(TEMP_DIR, f"video_only_{output_filename}")
-    final_output_location = os.path.join(OUTPUT_DIR, output_filename) if autosave else os.path.join(TEMP_DIR, output_filename)
+    final_output_location = os.path.join(output_dir, output_filename) if autosave else os.path.join(TEMP_DIR, output_filename)
 
 
     # --- Core Logic ---
@@ -927,13 +942,13 @@ def run_flashvsr_single(
         
         # Always save comparison video when it's created (regardless of autosave state)
         if comparison_path:
-            comparison_save_path = os.path.join(OUTPUT_DIR, comparison_filename)
+            comparison_save_path = os.path.join(output_dir, comparison_filename)
             shutil.copy(comparison_path, comparison_save_path)
             log(f"Side-by-side comparison saved to: {comparison_save_path}", message_type="finish")
     
     # Autosave upscaled output to outputs folder if enabled
     if autosave:  
-        final_save_path = os.path.join(OUTPUT_DIR, output_filename)
+        final_save_path = os.path.join(output_dir, output_filename)
         shutil.copy(temp_output_path, final_save_path)
         log(f"Processing complete! Auto-saved to: {final_save_path}", message_type="finish")
         status_msg = f'<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Processing complete! Auto-saved to: {final_save_path}</div>'
@@ -1260,7 +1275,8 @@ def run_flashvsr_batch_image(
     
     # Create batch subfolder with timestamp in images folder
     batch_folder_name = f"batch_{time.strftime('%Y%m%d_%H%M%S')}"
-    images_output_dir = os.path.join(OUTPUT_DIR, "images")
+    output_dir = get_output_dir()
+    images_output_dir = os.path.join(output_dir, "images")
     batch_output_dir = os.path.join(images_output_dir, batch_folder_name)
     os.makedirs(batch_output_dir, exist_ok=True)
     
@@ -1468,8 +1484,9 @@ def run_flashvsr_image(
         output_img.save(temp_image_path)
         
         # Autosave if enabled (to images subfolder)
+        output_dir = get_output_dir()
         if autosave:
-            images_output_dir = os.path.join(OUTPUT_DIR, "images")
+            images_output_dir = os.path.join(output_dir, "images")
             os.makedirs(images_output_dir, exist_ok=True)
             final_save_path = os.path.join(images_output_dir, output_filename)
             shutil.copy(temp_image_path, final_save_path)
@@ -1504,7 +1521,7 @@ def run_flashvsr_image(
                 comparison_img.paste(output_img, (input_upscaled.width, 0))
                 
                 # Save stitched comparison (always saved to images subfolder) with cleaned filename
-                images_output_dir = os.path.join(OUTPUT_DIR, "images")
+                images_output_dir = os.path.join(output_dir, "images")
                 os.makedirs(images_output_dir, exist_ok=True)
                 comparison_filename = f"{clean_basename}_{mode}_s{scale}_comp_{timestamp}.png"
                 comparison_save_path = os.path.join(images_output_dir, comparison_filename)
@@ -1563,7 +1580,8 @@ def run_flashvsr_batch(
     
     # Create batch subfolder with timestamp
     batch_folder_name = f"batch_{time.strftime('%Y%m%d_%H%M%S')}"
-    batch_output_dir = os.path.join(OUTPUT_DIR, batch_folder_name)
+    output_dir = get_output_dir()
+    batch_output_dir = os.path.join(output_dir, batch_folder_name)
     os.makedirs(batch_output_dir, exist_ok=True)
     
     batch_messages = [f"🚀 Starting batch process for {total_videos} videos..."]
@@ -1972,12 +1990,38 @@ def preview_chunk_processing(video_path, chunk_duration):
         fps = get_video_fps(video_path)
         return f'<div style="padding: 6px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 4px; color: #721c24; font-size: 0.85em; text-align: center;">❌ Chunk duration too short! Need at least {min_duration:.2f}s (21 frames @ {fps:.1f} FPS)</div>'
     
-    num_chunks = math.ceil(duration / chunk_duration)
-    avg_chunk_size = duration / num_chunks
+    # Simple chunk calculation - exact boundaries, no redistribution
+    fps = get_video_fps(video_path)
     
-    return f'''<div style="padding: 8px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">
-        📊 Will create {num_chunks} chunks of ~{avg_chunk_size:.1f}s each<br>
-        Video: {format_time_mmss(duration)} ({duration:.1f}s) <br>
+    # If video fits in one chunk (duration <= chunk_duration), just use single chunk
+    if duration <= chunk_duration:
+        return f'''<div style="padding: 8px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">
+            📊 Will process as 1 chunk ({duration:.2f}s, {round(duration * fps)} frames)<br>
+            Video: {format_time_mmss(duration)} ({duration:.2f}s)
+        </div>'''
+    
+    num_chunks = math.ceil(duration / chunk_duration)
+    last_chunk_duration = duration - (chunk_duration * (num_chunks - 1))
+    last_chunk_frames = round(last_chunk_duration * fps)  # Use round() not int() for accuracy
+    
+    warning_note = ""
+    if last_chunk_frames < 21:
+        warning_note = f'<br><span style="color: #856404;">⚠️ Last chunk only {last_chunk_frames} frames - adjust slider to avoid failure</span>'
+        bg_color = "#fff3cd"
+        border_color = "#ffc107"
+        text_color = "#856404"
+    else:
+        bg_color = "#d1ecf1"
+        border_color = "#bee5eb"
+        text_color = "#0c5460"
+    
+    # Format chunk sizes for display - use .2f for short durations
+    last_dur_str = f"{last_chunk_duration:.2f}s" if last_chunk_duration < 1 else f"{last_chunk_duration:.1f}s"
+    chunks_desc = f"{num_chunks - 1}x {chunk_duration:.1f}s + 1x {last_dur_str} ({last_chunk_frames} frames)"
+    
+    return f'''<div style="padding: 8px; background: {bg_color}; border: 1px solid {border_color}; border-radius: 4px; color: {text_color}; font-size: 0.85em; text-align: center;">
+        📊 Will create {chunks_desc}<br>
+        Video: {format_time_mmss(duration)} ({duration:.2f}s){warning_note}
     </div>'''
 
 
@@ -2015,7 +2059,8 @@ def save_preprocessed_video(video_path, progress=gr.Progress()):
     
     try:
         # Create preprocessed output directory
-        preprocessed_dir = os.path.join(OUTPUT_DIR, "preprocessed")
+        output_dir = get_output_dir()
+        preprocessed_dir = os.path.join(output_dir, "preprocessed")
         os.makedirs(preprocessed_dir, exist_ok=True)
         
         # Generate output filename with timestamp
@@ -2152,7 +2197,7 @@ def create_video_chunks(video_path, start_time, end_time, chunk_duration, progre
     trim_duration = end_time - start_time
     num_chunks = math.ceil(trim_duration / chunk_duration)
     
-    log(f"Creating {num_chunks} chunks of ~{chunk_duration}s each...", message_type="info")
+    log(f"Creating {num_chunks} chunks (max {chunk_duration}s each)...", message_type="info")
     
     chunk_paths = []
     input_basename = os.path.splitext(os.path.basename(video_path))[0]
@@ -2419,8 +2464,9 @@ def process_video_with_chunks(
         shutil.move(combined_path, temp_output_path)
     
     # Autosave if enabled
+    output_dir = get_output_dir()
     if autosave:
-        final_save_path = os.path.join(OUTPUT_DIR, output_filename)
+        final_save_path = os.path.join(output_dir, output_filename)
         shutil.copy(temp_output_path, final_save_path)
         log(f"Chunk processing complete! Auto-saved to: {final_save_path}", message_type="finish")
     else:
@@ -2486,7 +2532,7 @@ def handle_start_pipeline(
         return None, "⚠️ No input video found in the active tab. Please upload a video.", '<div style="padding: 12px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; color: #721c24;">❌ No input video</div>'
 
     if not selected_ops:
-        return None, "⚠️ No operations selected. Please check at least one box in 'Pipeline Steps'."
+        return None, "⚠️ No operations selected. Please check at least one box in 'Pipeline Steps'.", '<div style="padding: 12px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; color: #856404;">⚠️ No operations selected</div>'
 
     # Pack parameters for the processor
     params = {
@@ -2616,6 +2662,11 @@ def create_ui():
     if toolbox_processor is None:
         config = load_config()
         toolbox_processor = ToolboxProcessor(config.get("tb_autosave", True))
+        # Set custom output directory if configured
+        custom_output = config.get("output_dir", "").strip()
+        if custom_output and os.path.isabs(custom_output):
+            toolbox_processor.output_dir = Path(custom_output) / "toolbox"
+            os.makedirs(toolbox_processor.output_dir, exist_ok=True)
     
     # Available Gradio themes
     # Built-in Gradio themes
@@ -2804,16 +2855,16 @@ def create_ui():
                                 enable_chunk_processing = gr.Checkbox(
                                     label="Process as Chunks [Experimental] ",
                                     value=False,
-                                    info="Splits video into segments to reduce RAM/VRAM usage. Best for short-form, single-scene content."
+                                    info="Splits video into segments to reduce RAM/VRAM usage."
                                 )
                             with gr.Row(visible=False) as chunk_settings_row:
                                 chunk_duration_slider = gr.Slider(
-                                    minimum=3,
+                                    minimum=1,
                                     maximum=30,
-                                    step=1,
-                                    value=10,
-                                    label="Chunk Duration (seconds)",
-                                    info="Reduces RAM usage (frames in memory) and peak VRAM. Processing time scales linearly with video length."
+                                    step=0.5,
+                                    value=5,
+                                    label="Max Chunk Duration (seconds)",
+                                    info="Maximum length per chunk. Reduces RAM/VRAM usage. Last chunk may be shorter."
                                 )
                             chunk_preview_display = gr.HTML(
                                 value='<div style="padding: 6px; background: #d1ecf1; border: 1px solid #bee5eb; border-radius: 4px; color: #0c5460; font-size: 0.85em; text-align: center;">💡 Enable chunk processing for videos that exceed your available VRAM</div>',
@@ -3400,7 +3451,7 @@ def create_ui():
         )
         
         open_folder_button.click(
-            fn=lambda: open_folder(OUTPUT_DIR), 
+            fn=lambda: open_folder(get_output_dir()), 
             inputs=[], 
             outputs=[save_status]
         ).then(
@@ -3997,7 +4048,7 @@ def create_ui():
         
         # Open folder button
         def open_images_folder():
-            images_folder = os.path.join(OUTPUT_DIR, "images")
+            images_folder = os.path.join(get_output_dir(), "images")
             os.makedirs(images_folder, exist_ok=True)
             try:
                 if sys.platform == "win32":
@@ -4282,6 +4333,23 @@ def create_ui():
             )
             
             apply_theme_btn = gr.Button("Apply Theme", size="sm", variant="primary")
+            
+            # Output Directory Setting
+            gr.Markdown("### Output Directory")
+            with gr.Row():
+                current_output = load_config().get("output_dir", "").strip() or DEFAULT_OUTPUT_DIR
+                output_dir_input = gr.Textbox(
+                    label="Save Location",
+                    value=current_output,
+                    placeholder=DEFAULT_OUTPUT_DIR,
+                    info="Set a custom folder for saving outputs. Leave empty or use default path to save in the app's outputs folder.",
+                    scale=4
+                )
+                output_dir_status = gr.Textbox(label="Status", scale=2, interactive=False, show_label=False)
+            
+            with gr.Row():
+                apply_output_dir_btn = gr.Button("Apply Output Directory", size="sm", variant="primary")
+                reset_output_dir_btn = gr.Button("Reset to Default", size="sm", variant="secondary")
         
         def toggle_custom_input(theme_name):
             return gr.update(visible=(theme_name == "Custom"))
@@ -4310,6 +4378,59 @@ def create_ui():
             fn=apply_theme,
             inputs=[theme_dropdown, custom_theme_input],
             outputs=[theme_status]
+        )
+        
+        def apply_output_dir(new_dir):
+            new_dir = new_dir.strip()
+            config = load_config()
+            
+            if not new_dir or new_dir == DEFAULT_OUTPUT_DIR:
+                # Reset to default
+                config["output_dir"] = ""
+                save_config(config)
+                # Update toolbox if initialized
+                if toolbox_processor:
+                    toolbox_processor.output_dir = Path(DEFAULT_OUTPUT_DIR) / "toolbox"
+                    os.makedirs(toolbox_processor.output_dir, exist_ok=True)
+                return f"✅ Output directory reset to default: {DEFAULT_OUTPUT_DIR}"
+            
+            # Validate the path
+            if not os.path.isabs(new_dir):
+                return "⚠️ Please enter an absolute path (e.g., C:\\Users\\Name\\Videos or /home/user/videos)"
+            
+            # Try to create the directory
+            try:
+                os.makedirs(new_dir, exist_ok=True)
+                config["output_dir"] = new_dir
+                save_config(config)
+                # Update toolbox if initialized
+                if toolbox_processor:
+                    toolbox_processor.output_dir = Path(new_dir) / "toolbox"
+                    os.makedirs(toolbox_processor.output_dir, exist_ok=True)
+                return f"✅ Output directory set to: {new_dir}"
+            except Exception as e:
+                return f"❌ Error creating directory: {e}"
+        
+        def reset_output_dir():
+            config = load_config()
+            config["output_dir"] = ""
+            save_config(config)
+            # Update toolbox if initialized
+            if toolbox_processor:
+                toolbox_processor.output_dir = Path(DEFAULT_OUTPUT_DIR) / "toolbox"
+                os.makedirs(toolbox_processor.output_dir, exist_ok=True)
+            return DEFAULT_OUTPUT_DIR, f"✅ Output directory reset to default: {DEFAULT_OUTPUT_DIR}"
+        
+        apply_output_dir_btn.click(
+            fn=apply_output_dir,
+            inputs=[output_dir_input],
+            outputs=[output_dir_status]
+        )
+        
+        reset_output_dir_btn.click(
+            fn=reset_output_dir,
+            inputs=[],
+            outputs=[output_dir_input, output_dir_status]
         )
 
         # Footer with author credits
@@ -4354,7 +4475,7 @@ def create_ui():
     return demo
 
 if __name__ == "__main__":
-    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs(get_output_dir(), exist_ok=True)
     
     # Check user preference for clearing temp on start
     config = load_config()

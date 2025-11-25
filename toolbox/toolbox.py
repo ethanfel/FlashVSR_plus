@@ -697,7 +697,8 @@ class ToolboxProcessor:
                 speed_factor = 1.0
             
             if use_streaming and should_interpolate:
-                self.rife_handler._ensure_model_downloaded_and_loaded()
+                if not self.rife_handler._ensure_model_downloaded_and_loaded():
+                    raise gr.Error("❌ RIFE model failed to download or load. Please check your internet connection and try again. If the problem persists, try manually deleting the 'toolbox/model_rife' folder and restarting.")
                 temp_video_path = self._generate_output_path(video_path, "frames_temp", is_temp=True)
                 writer = imageio.get_writer(
                     temp_video_path, 
@@ -734,7 +735,8 @@ class ToolboxProcessor:
                     print(f"Speed adjustment: {len(frames)} → {len(processed_frames)} frames")
                 
                 if should_interpolate and len(processed_frames) > 1:
-                    self.rife_handler._ensure_model_downloaded_and_loaded()
+                    if not self.rife_handler._ensure_model_downloaded_and_loaded():
+                        raise gr.Error("❌ RIFE model failed to download or load. Please check your internet connection and try again. If the problem persists, try manually deleting the 'toolbox/model_rife' folder and restarting.")
                     num_passes = int(math.log2(interpolation_factor))
                     for p in range(num_passes):
                         print(f"INFO: Starting RIFE interpolation pass {p + 1}/{num_passes}...")
@@ -814,6 +816,9 @@ class ToolboxProcessor:
                 shutil.move(temp_video_path, final_temp_output)
 
             return str(final_temp_output)
+        except gr.Error:
+            # Re-raise Gradio errors so they can be caught by process_pipeline for console display
+            raise
         except Exception as e:
             print(f"Error during frame adjustment: {e}\n{traceback.format_exc()}")
             return video_path
@@ -1206,12 +1211,18 @@ class ToolboxProcessor:
             if op_name in operations:
                 messages.append(f"  -> Starting '{op_name}' step...")
                 original_path = current_video_path
-                if op_name == "Frame Adjust":
-                    current_video_path = self.adjust_frames(current_video_path, **params["frame_adjust"], progress=progress)
-                elif op_name == "Video Loop":
-                    current_video_path = self.create_loop(current_video_path, **params["loop"], progress=progress)
-                elif op_name == "Export":
-                    current_video_path = self.export_video(current_video_path, **params["export"], progress=progress)
+                try:
+                    if op_name == "Frame Adjust":
+                        current_video_path = self.adjust_frames(current_video_path, **params["frame_adjust"], progress=progress)
+                    elif op_name == "Video Loop":
+                        current_video_path = self.create_loop(current_video_path, **params["loop"], progress=progress)
+                    elif op_name == "Export":
+                        current_video_path = self.export_video(current_video_path, **params["export"], progress=progress)
+                except gr.Error as e:
+                    # Capture Gradio errors and add to messages for display in console
+                    messages.append(f"❌ {str(e)}")
+                    messages.append(f"❌ Operation '{op_name}' failed. Aborting pipeline.")
+                    return None, "\n".join(messages)
                 if current_video_path == original_path:
                     messages.append(f"❌ Operation '{op_name}' failed. Aborting pipeline.")
                     return None, "\n".join(messages)
