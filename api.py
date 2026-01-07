@@ -8,6 +8,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 from pathlib import Path
 import time
+import base64
 
 # Import core logic and helper functions from your webui.py
 from webui import (
@@ -153,7 +154,20 @@ async def upscale_video(req: UpscaleRequest, background_tasks: BackgroundTasks):
 
         b = time.time()
         log(f"Finished in {b-a:.2f} seconds", message_type="info")
-        return FileResponse(path=output_path, media_type="video/mp4", filename=os.path.basename(output_path))
+
+        with open(output_path, "rb") as video_file:
+            encoded_string = base64.b64encode(video_file.read()).decode('utf-8')
+        
+        # Since we encoded it to a string, we can clean up the output file immediately
+        files_to_clean.append(output_path)
+        background_tasks.add_task(cleanup_files, files_to_clean)
+        
+        return {
+            "status": "success",
+            "filename": os.path.basename(output_path),
+            "base64": encoded_string
+        }
+        # return FileResponse(path=output_path, media_type="video/mp4", filename=os.path.basename(output_path))
 
     except Exception as e:
         log(f"API Error: {str(e)}", message_type="error")
