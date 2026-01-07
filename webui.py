@@ -2166,155 +2166,70 @@ def trim_video(video_path, start_time, end_time, progress=gr.Progress()):
         return video_path
 
 def create_video_chunks(video_path, start_time, end_time, chunk_duration, progress=gr.Progress()):
-    """Split video into chunks and return list of chunk paths."""
     if not video_path or not os.path.exists(video_path):
-        log("No video provided for chunking", message_type="warning")
-        return []
-    
-    if not is_ffmpeg_available():
-        log("FFmpeg not available, cannot create chunks", message_type="error")
         return []
     
     total_duration = get_video_duration(video_path)
+    fps = get_video_fps(video_path)
+    min_duration = 22 / fps # Use 22 frames as safety buffer for the 21-frame limit
+    
     start_time = max(0, min(start_time, total_duration))
-    
-    # Handle end_time = 0 as "end of video" before clamping
-    if end_time == 0:
+    if end_time <= 0 or end_time > total_duration:
         end_time = total_duration
-    else:
-        end_time = max(start_time, min(end_time, total_duration))
-    
-    # Validate range
-    if end_time <= start_time:
-        log(f"Invalid chunk range: end time ({end_time:.1f}s) must be after start time ({start_time:.1f}s)", message_type="error")
-        return []
-    
-    # Validate chunk duration
-    if chunk_duration <= 0:
-        log(f"Invalid chunk duration: must be greater than 0", message_type="error")
-        return []
-    
+        
     trim_duration = end_time - start_time
-    num_chunks = math.ceil(trim_duration / chunk_duration)
-    
-    log(f"Creating {num_chunks} chunks (max {chunk_duration}s each)...", message_type="info")
-    
     chunk_paths = []
-    input_basename = os.path.splitext(os.path.basename(video_path))[0]
-    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    current_pos = start_time
     
-    for i in range(num_chunks):
-        chunk_start = start_time + (i * chunk_duration)
-        chunk_end = min(chunk_start + chunk_duration, end_time)
-        chunk_dur = chunk_end - chunk_start
+    log(f"Starting smart chunking for {trim_duration:.2f}s video...", message_type="info")
+
+    while current_pos < end_time:
+        chunk_end = min(current_pos + chunk_duration, end_time)
         
-        progress((i / num_chunks) * 0.8, desc=f"Creating chunk {i+1}/{num_chunks}...")
-        
-        output_filename = f"{input_basename}_chunk{i+1:03d}_{timestamp}.mp4"
+        # FIX: If the NEXT chunk would be shorter than the minimum, 
+        # extend THIS chunk to cover the rest of the video.
+        remaining_after_this = end_time - chunk_end
+        if 0 < remaining_after_this < min_duration:
+            chunk_end = end_time
+            
+        dur = chunk_end - current_pos
+        output_filename = f"chunk_{len(chunk_paths)}_{uuid.uuid4().hex[:6]}.mp4"
         output_path = os.path.join(TEMP_DIR, output_filename)
         
-        try:
-            ffmpeg_cmd = [
-                'ffmpeg', '-y',
-                '-ss', str(chunk_start),
-                '-i', video_path,
-                '-t', str(chunk_dur),
-                '-c:v', 'libx264',
-                '-preset', 'medium',
-                '-crf', '18',
-                '-pix_fmt', 'yuv420p',
-                '-map', '0:v:0',
-                '-map', '0:a:0?',
-                '-c:a', 'aac',
-                '-b:a', '192k',
-                output_path
-            ]
+        ffmpeg_cmd = [
+            'ffmpeg', '-y', '-ss', str(current_pos), '-i', video_path,
+            '-t', str(dur), '-c:v', 'libx264', '-crf', '17', '-pix_fmt', 'yuv420p', output_path
+        ]
+        
+        subprocess.run(ffmpeg_cmd, capture_output=True, check=True)
+        chunk_paths.append(output_path)
+        current_pos = chunk_end
+        
+        if current_pos >= end_time:
+            break
             
-            result = subprocess.run(
-                ffmpeg_cmd,
-                capture_output=True,
-                text=True,
-                check=True
-            )
-            
-            chunk_paths.append(output_path)
-            log(f"Created chunk {i+1}/{num_chunks}: {chunk_start:.1f}s-{chunk_end:.1f}s", message_type="info")
-            
-        except subprocess.CalledProcessError as e:
-            log(f"Error creating chunk {i+1}: {e}", message_type="error")
-            continue
-    
-    progress(1.0, desc=f"Created {len(chunk_paths)} chunks!")
-    log(f"Successfully created {len(chunk_paths)} chunks", message_type="finish")
     return chunk_paths
 
 def combine_video_chunks(chunk_paths, output_name_base, progress=gr.Progress()):
-    """Combine processed video chunks into a single video."""
-    if not chunk_paths:
-        log("No chunks to combine", message_type="warning")
-        return None
+    if not chunk_paths: return None
     
-    if not is_ffmpeg_available():
-        log("FFmpeg not available, cannot combine chunks", message_type="error")
-        return None
+    # Create the concat list
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    concat_list_path = os.path.join(TEMP_DIR, f"list_{timestamp}.txt")
+    with open(concat_list_path, 'w') as f:
+        for p in chunk_paths:
+            f.write(f"file '{os.path.abspath(p).replace('\\', '/')}'\n")
+            
+    output_path = os.path.join(TEMP_DIR, f"{output_name_base}_combined.mp4")
     
-    log(f"Combining {len(chunk_paths)} chunks...", message_type="info")
-    progress(0.1, desc="Preparing to combine chunks...")
+    # FIX: Remove '-c copy'. Use re-encoding to fix AI-generated timestamp issues.
+    ffmpeg_cmd = [
+        'ffmpeg', '-y', '-f', 'concat', '-safe', '0', '-i', concat_list_path,
+        '-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p', output_path
+    ]
     
-    try:
-        # Create a temporary file list for FFmpeg concat
-        timestamp = time.strftime("%Y%m%d_%H%M%S")
-        concat_list_path = os.path.join(TEMP_DIR, f"concat_list_{timestamp}.txt")
-        
-        with open(concat_list_path, 'w') as f:
-            for chunk_path in chunk_paths:
-                # FFmpeg concat requires absolute paths with proper escaping
-                abs_path = os.path.abspath(chunk_path).replace('\\', '/')
-                f.write(f"file '{abs_path}'\n")
-        
-        output_filename = f"{output_name_base}_combined_{timestamp}.mp4"
-        output_path = os.path.join(TEMP_DIR, output_filename)
-        
-        progress(0.3, desc="Running FFmpeg concat...")
-        
-        # Use concat demuxer for fast, lossless concatenation
-        ffmpeg_cmd = [
-            'ffmpeg', '-y',
-            '-f', 'concat',
-            '-safe', '0',
-            '-i', concat_list_path,
-            '-c', 'copy',  # Copy streams without re-encoding
-            output_path
-        ]
-        
-        result = subprocess.run(
-            ffmpeg_cmd,
-            capture_output=True,
-            text=True,
-            check=True
-        )
-        
-        # Clean up concat list file
-        try:
-            os.remove(concat_list_path)
-        except:
-            pass
-        
-        progress(1.0, desc="Chunks combined!")
-        log(f"Successfully combined chunks: {output_path}", message_type="finish")
-        return output_path
-        
-    except subprocess.CalledProcessError as e:
-        log(f"FFmpeg error during combine: {e}", message_type="error")
-        if e.stderr:
-            log("FFmpeg stderr:", message_type="error")
-            for line in e.stderr.split('\n')[-10:]:
-                if line.strip():
-                    log(f"  {line}", message_type="error")
-        return None
-    except Exception as e:
-        log(f"Error combining chunks: {e}", message_type="error")
-        return None
+    subprocess.run(ffmpeg_cmd, capture_output=True, check=True)
+    return output_path
 
 def process_video_with_chunks(
     input_path, chunk_duration, mode, model_version, scale, color_fix, tiled_vae, tiled_dit,
@@ -2414,6 +2329,12 @@ def process_video_with_chunks(
         except Exception as e:
             log(f"Error processing chunk {i+1}/{num_chunks}: {e}", message_type="error")
             continue
+
+        clean_vram()
+        import gc
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
     
     # Clean up unprocessed chunks
     for chunk_path in chunk_paths:
