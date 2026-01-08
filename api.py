@@ -97,8 +97,14 @@ async def run_processing_task(task_id: str, req: UpscalingSelectionRequest):
     files_to_clean = [target_input]
     
     class SimpleProgress:
-        def __call__(self, val, desc=""): TASKS[task_id]["message"] = f"{desc} ({val*100:.0f}%)"
-        def tqdm(self, iterable, *args, **kwargs): return iterable
+        def __call__(self, val, desc=""): 
+            TASKS[task_id]["message"] = f"{desc} ({val*100:.0f}%)"
+            print(f"[Task {task_id[:8]}] {desc} ({val*100:.0f}%)", flush=True)
+            
+        def tqdm(self, iterable, *args, **kwargs): 
+            # Optional: If you want to see standard tqdm bars in terminal
+            from tqdm import tqdm
+            return tqdm(iterable, *args, **kwargs)
 
     a = time.time()
     try:
@@ -120,6 +126,8 @@ async def run_processing_task(task_id: str, req: UpscalingSelectionRequest):
             result = run_flashvsr_single(input_path=target_input, progress=SimpleProgress(), **req.dict(exclude={'half_res_preprocess', 'chunk_duration', 'enable_chunks'}))
 
         output_path = result[1]
+        b = time.time()
+        print(f"[Task {task_id[:8]}] Processing finished in {b-a:.2f} seconds", flush=True)
         
         # Storage and Finalization
         storage_key = f"{task_id}_out.mp4"
