@@ -1,5 +1,5 @@
 from pydantic_settings import BaseSettings
-from .configs import (
+from configs import (
     RedisConfig,
     VideoSchedulerConfig,
     BandwidthConfig,

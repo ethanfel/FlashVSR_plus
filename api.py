@@ -4,7 +4,7 @@ import requests
 import uvicorn
 import time
 import base64
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, FastAPI, Query
 from pydantic import BaseModel, Field
 from webui import (
     run_flashvsr_single, 
@@ -18,6 +18,9 @@ from webui import (
 from storage_client import storage_client
 
 app = FastAPI(title="FlashVSR+ Polling API")
+
+# Include API routes
+api_router = APIRouter(tags=["videos"])
 
 # Ensure directories exist
 os.makedirs(TEMP_DIR, exist_ok=True)
@@ -139,14 +142,14 @@ async def run_processing_task(task_id: str, req: UpscalingSelectionRequest):
 
 # --- Routes ---
 
-@app.post("/videos/upload", response_model=VideoUploadResponse)
+@api_router.post("/videos/upload", response_model=VideoUploadResponse)
 async def upload_video(request: VideoUploadRequest, background_tasks: BackgroundTasks):
     task_id = str(uuid.uuid4())
     TASKS[task_id] = {"status": "created", "message": "Task initialized"}
     background_tasks.add_task(download_and_store, task_id, request.video_url)
     return {"task_id": task_id, "message": "Download initiated"}
 
-@app.post("/videos/{task_id}/upscaling")
+@api_router.post("/videos/{task_id}/upscaling")
 async def start_upscaling(task_id: str, request: UpscalingSelectionRequest, background_tasks: BackgroundTasks):
     if task_id not in TASKS: raise HTTPException(status_code=404, detail="Task not found")
     if TASKS[task_id]["status"] != "downloaded":
@@ -155,7 +158,7 @@ async def start_upscaling(task_id: str, request: UpscalingSelectionRequest, back
     background_tasks.add_task(run_processing_task, task_id, request)
     return {"status": "accepted", "message": "Processing started in background"}
 
-@app.get("/videos/{task_id}/status", response_model=VideoStatusResponse)
+@api_router.get("/videos/{task_id}/status", response_model=VideoStatusResponse)
 async def get_status(task_id: str):
     if task_id not in TASKS: raise HTTPException(status_code=404, detail="Task not found")
     task = TASKS[task_id]
@@ -165,6 +168,8 @@ async def get_status(task_id: str):
         "message": task.get("message", ""),
         "output_url": task.get("output_url")
     }
+
+app.include_router(api_router, prefix="/api/v1")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)
