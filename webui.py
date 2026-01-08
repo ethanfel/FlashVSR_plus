@@ -127,7 +127,7 @@ def log(message:str, message_type:str="normal"):
         message = '\033[1;33m' + message + '\033[m'
     else:
         message = message
-    print(f"{message}")
+    print(f"{message}", flush=True)
 
 def dummy_tqdm(iterable, *args, **kwargs):
     return iterable
