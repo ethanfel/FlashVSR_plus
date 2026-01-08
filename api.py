@@ -121,9 +121,55 @@ async def run_processing_task(task_id: str, req: UpscalingSelectionRequest):
 
         # Original Processing Branching
         if req.enable_chunks:
-            result = process_video_with_chunks(input_path=target_input, progress=SimpleProgress(), **req.dict(exclude={'half_res_preprocess'}))
+            result = process_video_with_chunks(
+                input_path=target_input,
+                chunk_duration=req.chunk_duration,
+                mode=req.mode,
+                model_version=req.model_version,
+                scale=req.scale,
+                color_fix=req.color_fix,
+                tiled_vae=req.tiled_vae,
+                tiled_dit=req.tiled_dit,
+                tile_size=req.tile_size,
+                tile_overlap=req.tile_overlap,
+                unload_dit=req.unload_dit,
+                dtype_str=req.dtype_str,
+                seed=req.seed,
+                device=req.device,
+                fps_override=req.fps_override,
+                quality=req.quality,
+                attention_mode=req.attention_mode,
+                sparse_ratio=req.sparse_ratio,
+                kv_ratio=req.kv_ratio,
+                local_range=req.local_range,
+                autosave=False, # We handle the response file manually
+                progress=SimpleProgress()
+            )
         else:
-            result = run_flashvsr_single(input_path=target_input, progress=SimpleProgress(), **req.dict(exclude={'half_res_preprocess', 'chunk_duration', 'enable_chunks'}))
+            result = run_flashvsr_single(
+                input_path=target_input,
+                mode=req.mode,
+                model_version=req.model_version,
+                scale=req.scale,
+                color_fix=req.color_fix,
+                tiled_vae=req.tiled_vae,
+                tiled_dit=req.tiled_dit,
+                tile_size=req.tile_size,
+                tile_overlap=req.tile_overlap,
+                unload_dit=req.unload_dit,
+                dtype_str=req.dtype_str,
+                seed=req.seed,
+                device=req.device,
+                fps_override=req.fps_override,
+                quality=req.quality,
+                attention_mode=req.attention_mode,
+                sparse_ratio=req.sparse_ratio,
+                kv_ratio=req.kv_ratio,
+                local_range=req.local_range,
+                autosave=False,
+                create_comparison=req.create_comparison,
+                progress=SimpleProgress()
+            )
 
         output_path = result[1]
         b = time.time()
