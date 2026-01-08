@@ -2,6 +2,7 @@ import os
 import uuid
 import requests
 import uvicorn
+import asyncio
 import time
 import base64
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, FastAPI, Query
@@ -68,8 +69,21 @@ class VideoStatusResponse(BaseModel):
     message: str
     output_url: str = None
 
+TASK_QUEUE = asyncio.Queue()
 TASKS = {} 
 
+async def queue_worker():
+    """Process tasks from the queue one by one."""
+    while True:
+        task_id, req = await TASK_QUEUE.get()
+        try:
+            await run_processing_task(task_id, req)
+        finally:
+            TASK_QUEUE.task_done()
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(queue_worker())
 
 def download_and_store(task_id: str, url: str):
     try:
@@ -199,18 +213,19 @@ async def run_processing_task(task_id: str, req: UpscalingSelectionRequest):
 @api_router.post("/videos/upload", response_model=VideoUploadResponse)
 async def upload_video(request: VideoUploadRequest, background_tasks: BackgroundTasks):
     task_id = str(uuid.uuid4())
-    TASKS[task_id] = {"status": "created", "message": "Task initialized"}
+    TASKS[task_id] = {"status": "created", "message": "Task initialized", "position": None}
     background_tasks.add_task(download_and_store, task_id, request.video_url)
     return {"task_id": task_id, "message": "Download initiated"}
 
 @api_router.post("/videos/{task_id}/upscaling")
-async def start_upscaling(task_id: str, request: UpscalingSelectionRequest, background_tasks: BackgroundTasks):
+async def start_upscaling(task_id: str, request: UpscalingSelectionRequest):
     if task_id not in TASKS: raise HTTPException(status_code=404, detail="Task not found")
     if TASKS[task_id]["status"] != "downloaded":
         raise HTTPException(status_code=400, detail=f"Video not ready. Current status: {TASKS[task_id]['status']}")
     
-    background_tasks.add_task(run_processing_task, task_id, request)
-    return {"status": "accepted", "message": "Processing started in background"}
+    TASKS[task_id].update({"status": "queued", "message": "Waiting in queue"})
+    await TASK_QUEUE.put((task_id, request))
+    return {"status": "accepted", "message": "Added to processing queue", "queue_position": TASK_QUEUE.qsize()}
 
 @api_router.get("/videos/{task_id}/status", response_model=VideoStatusResponse)
 async def get_status(task_id: str):
@@ -221,6 +236,13 @@ async def get_status(task_id: str):
         "status": task.get("status"),
         "message": task.get("message", ""),
         "output_url": task.get("output_url")
+    }
+
+@api_router.get("/queue/status")
+async def get_queue_status():
+    return {
+        "queue_size": TASK_QUEUE.qsize(),
+        "active_tasks": [tid for tid, t in TASKS.items() if t['status'] in ['processing', 'queued']]
     }
 
 app.include_router(api_router, prefix="/api/v1")
