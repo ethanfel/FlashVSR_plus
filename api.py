@@ -18,10 +18,24 @@ from webui import (
     log
 )
 from storage_client import storage_client
+from concurrent.futures import ProcessPoolExecutor
+import signal
+
 
 
 MAX_CONCURRENT_TASKS = 1  # Adjust based on your GPU memory/capacity
 CANCELLED_TASKS = set()
+
+# Global executor
+executor = ProcessPoolExecutor(max_workers=MAX_CONCURRENT_TASKS)
+
+def shutdown_handler(signum, frame):
+    print("Shutdown signal received. Killing workers...")
+    executor.shutdown(wait=False, cancel_futures=True)
+    os._exit(0)
+
+signal.signal(signal.SIGINT, shutdown_handler)
+signal.signal(signal.SIGTERM, shutdown_handler)
 
 app = FastAPI(title="FlashVSR+ Polling API")
 
@@ -124,6 +138,7 @@ async def run_processing_task(task_id: str, req: UpscalingSelectionRequest):
     task = TASKS.get(task_id)
     target_input = task["input_path"]
     files_to_clean = [target_input]
+    loop = asyncio.get_running_loop()
     
     class SimpleProgress:
         def __call__(self, val, desc=""): 
@@ -152,56 +167,57 @@ async def run_processing_task(task_id: str, req: UpscalingSelectionRequest):
 
         # Original Processing Branching
         if req.enable_chunks:
-            result = await asyncio.to_thread(
+            result = await loop.run_in_executor(
+                executor,
                 process_video_with_chunks,
-                input_path=target_input,
-                chunk_duration=req.chunk_duration,
-                mode=req.mode,
-                model_version=req.model_version,
-                scale=req.scale,
-                color_fix=req.color_fix,
-                tiled_vae=req.tiled_vae,
-                tiled_dit=req.tiled_dit,
-                tile_size=req.tile_size,
-                tile_overlap=req.tile_overlap,
-                unload_dit=req.unload_dit,
-                dtype_str=req.dtype_str,
-                seed=req.seed,
-                device=req.device,
-                fps_override=req.fps_override,
-                quality=req.quality,
-                attention_mode=req.attention_mode,
-                sparse_ratio=req.sparse_ratio,
-                kv_ratio=req.kv_ratio,
-                local_range=req.local_range,
-                autosave=False,
-                progress=SimpleProgress()
+                target_input,
+                req.chunk_duration,
+                req.mode,
+                req.model_version,
+                req.scale,
+                req.color_fix,
+                req.tiled_vae,
+                req.tiled_dit,
+                req.tile_size,
+                req.tile_overlap,
+                req.unload_dit,
+                req.dtype_str,
+                req.seed,
+                req.device,
+                req.fps_override,
+                req.quality,
+                req.attention_mode,
+                req.sparse_ratio,
+                req.kv_ratio,
+                req.local_range,
+                False, # autosave
+                req.create_comparison
             )
         else:
-            result = await asyncio.to_thread(
+            result = await loop.run_in_executor(
+                executor, 
                 run_flashvsr_single,
-                input_path=target_input,
-                mode=req.mode,
-                model_version=req.model_version,
-                scale=req.scale,
-                color_fix=req.color_fix,
-                tiled_vae=req.tiled_vae,
-                tiled_dit=req.tiled_dit,
-                tile_size=req.tile_size,
-                tile_overlap=req.tile_overlap,
-                unload_dit=req.unload_dit,
-                dtype_str=req.dtype_str,
-                seed=req.seed,
-                device=req.device,
-                fps_override=req.fps_override,
-                quality=req.quality,
-                attention_mode=req.attention_mode,
-                sparse_ratio=req.sparse_ratio,
-                kv_ratio=req.kv_ratio,
-                local_range=req.local_range,
-                autosave=False,
-                create_comparison=req.create_comparison,
-                progress=SimpleProgress()
+                target_input,
+                req.mode,
+                req.model_version,
+                req.scale,
+                req.color_fix,
+                req.tiled_vae,
+                req.tiled_dit,
+                req.tile_size,
+                req.tile_overlap,
+                req.unload_dit,
+                req.dtype_str,
+                req.seed,
+                req.device,
+                req.fps_override,
+                req.quality,
+                req.attention_mode,
+                req.sparse_ratio,
+                req.kv_ratio,
+                req.local_range,
+                False, # autosave
+                req.create_comparison
             )
 
         output_path = result[1]
