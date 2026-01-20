@@ -28,6 +28,7 @@ from src import ModelManager, FlashVSRFullPipeline, FlashVSRTinyPipeline, FlashV
 from src.models import wan_video_dit
 from src.models.TCDecoder import build_tcdecoder
 from src.models.utils import get_device_list, clean_vram, Buffer_LQ4x_Proj, Causal_LQ4x_Proj
+from src.models.ffmpeg_utils import get_gpu_encoder, get_gpu_decoder_args, get_imageio_settings
 
 from toolbox.system_monitor import SystemMonitor
 from toolbox.toolbox import ToolboxProcessor
@@ -284,7 +285,8 @@ def is_ffmpeg_available():
 
 def save_video(frames, save_path, fps=30, quality=5, progress_desc="Saving video..."):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
-    with imageio.get_writer(save_path, fps=fps, quality=quality, macro_block_size=1) as writer:
+    ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
+    with imageio.get_writer(save_path, fps=fps, ffmpeg_params=ffmpeg_params, macro_block_size=1) as writer:
         for i in tqdm(range(frames.shape[0]), desc=f"[FlashVSR] {progress_desc}"):
             frame_np = (frames[i].cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
             writer.append_data(frame_np)
@@ -445,7 +447,8 @@ def stitch_video_tiles(
             for r in readers: r.close()
             readers = [imageio.get_reader(p) for p in tile_paths]
 
-        with imageio.get_writer(output_path, fps=fps, quality=quality, macro_block_size=1) as writer:
+        ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
+        with imageio.get_writer(output_path, fps=fps, ffmpeg_params=ffmpeg_params, macro_block_size=1) as writer:
             for start_frame in tqdm(range(0, num_frames, chunk_size), desc="[FlashVSR] Stitching Chunks"):
                 end_frame = min(start_frame + chunk_size, num_frames)
                 current_chunk_size = end_frame - start_frame
@@ -522,22 +525,36 @@ def create_side_by_side_comparison(input_path, output_path, comparison_output_pa
         # Use scale2ref to scale input to match output's height, then hstack
         # Force even dimensions for H.264 compatibility using -2 (auto-calculate to even number)
         # [0:v] is input (to be scaled), [1:v] is output (reference - the larger one)
+        
+        gpu_encoder = get_gpu_encoder()
+        hwaccel_args = get_gpu_decoder_args()
+        
         ffmpeg_cmd = [
-            'ffmpeg', '-y',
+            'ffmpeg', '-y'
+        ] + hwaccel_args + [
             '-i', input_path,
             '-i', output_path,
             '-filter_complex',
             '[0:v][1:v]scale2ref=-2:ih[left][right];[left][right]hstack=inputs=2[v]',
             '-map', '[v]',
             '-map', '1:a?',  # Use audio from output video if available
-            '-c:v', 'libx264',
-            '-preset', 'medium',
-            '-crf', '18',
+            '-c:v', gpu_encoder,
+            '-preset', 'medium' if 'nvenc' not in gpu_encoder else 'p4',
             '-pix_fmt', 'yuv420p',
             '-c:a', 'aac',
             '-b:a', '192k',
             comparison_output_path
         ]
+        
+        # Add CRF/Quality if not using hardware encoder that doesn't support it directly
+        if gpu_encoder == 'libx264':
+            ffmpeg_cmd.insert(-1, '-crf')
+            ffmpeg_cmd.insert(-1, '18')
+        elif gpu_encoder == 'h264_nvenc':
+            ffmpeg_cmd.insert(-1, '-rc')
+            ffmpeg_cmd.insert(-1, 'vbr')
+            ffmpeg_cmd.insert(-1, '-cq')
+            ffmpeg_cmd.insert(-1, '18')
         
         result = subprocess.run(
             ffmpeg_cmd,

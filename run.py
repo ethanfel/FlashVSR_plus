@@ -57,6 +57,7 @@ from src import ModelManager, FlashVSRFullPipeline, FlashVSRTinyPipeline, FlashV
 from src.models import wan_video_dit
 from src.models.TCDecoder import build_tcdecoder
 from src.models.utils import get_device_list, clean_vram, Buffer_LQ4x_Proj
+from src.models.ffmpeg_utils import get_gpu_encoder, get_gpu_decoder_args, get_imageio_settings
 
 root = os.path.dirname(os.path.abspath(__file__))
 temp = os.path.join(root, "_temp")
@@ -103,7 +104,9 @@ def is_video(path):
 def save_video(frames, save_path, fps=30, quality=5):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     frames_np = (frames.cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
-    w = imageio.get_writer(save_path, fps=fps, quality=quality)
+    
+    ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
+    w = imageio.get_writer(save_path, fps=fps, ffmpeg_params=ffmpeg_params)
     for frame_np in tqdm(frames_np, desc=f"[FlashVSR] Saving video"):
         w.append_data(frame_np)
     w.close()
@@ -129,9 +132,14 @@ def merge_video_with_audio(video_path, audio_source_path):
         os.rename(video_path, temp)
         input_video = ffmpeg.input(temp)['v']
         input_audio = ffmpeg.input(audio_source_path)['a']
+        
+        # Use GPU acceleration for merging if possible
+        vcodec = 'copy'
+        acodec = 'copy'
+        
         output_ffmpeg = ffmpeg.output(
             input_video, input_audio, video_path,
-            vcodec='copy', acodec='copy'
+            vcodec=vcodec, acodec=acodec
         ).run(overwrite_output=True, quiet=True)
         log(f"[FlashVSR] Output video saved to '{video_path}'", message_type='info')
     except ffmpeg.Error as e:
@@ -359,10 +367,11 @@ def stitch_video_tiles(
         if num_frames is None or num_frames <= 0:
             num_frames = len([_ for _ in readers[0]])
             for r in readers: r.close()
-            readers = [imageio.get_reader(p) for p in tile_paths]
+            # Get GPU settings for stitching
+            ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
             
         # 打开最终的写入器
-        with imageio.get_writer(output_path, fps=fps, quality=quality) as writer:
+        with imageio.get_writer(output_path, fps=fps, ffmpeg_params=ffmpeg_params) as writer:
             
             # 2. 按 chunk_size 遍历所有帧
             # tqdm 现在描述的是处理了多少个“块”

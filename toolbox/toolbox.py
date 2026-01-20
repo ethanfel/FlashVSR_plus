@@ -17,8 +17,8 @@ from pathlib import Path
 
 import devicetorch
 
-# Local imports for RIFE and ESRGAN
 from toolbox.rife_core import RIFEHandler
+from src.models.ffmpeg_utils import get_gpu_encoder, get_gpu_decoder_args, get_imageio_settings
 
 device_name_str = devicetorch.get(torch)
 
@@ -700,10 +700,19 @@ class ToolboxProcessor:
                 if not self.rife_handler._ensure_model_downloaded_and_loaded():
                     raise gr.Error("❌ RIFE model failed to download or load. Please check your internet connection and try again. If the problem persists, try manually deleting the 'toolbox/model_rife' folder and restarting.")
                 temp_video_path = self._generate_output_path(video_path, "frames_temp", is_temp=True)
+                
+                ffmpeg_params = get_imageio_settings(fps=output_fps, quality=None) # Quality handled by CRF in params anyway or we can add it
+                # Override preset if needed
+                if 'nvenc' in ffmpeg_params:
+                    ffmpeg_params.extend(['-preset', 'p4'])
+                else:
+                    ffmpeg_params.extend(['-preset', 'medium'])
+                ffmpeg_params.extend(['-crf', str(crf)])
+
                 writer = imageio.get_writer(
                     temp_video_path, 
                     fps=output_fps,
-                    ffmpeg_params=['-crf', str(crf), '-preset', 'medium']
+                    ffmpeg_params=ffmpeg_params
                 )
                 frame_iterator = iter(reader)
                 frame1 = next(frame_iterator, None)
@@ -765,12 +774,20 @@ class ToolboxProcessor:
                 import warnings
                 with warnings.catch_warnings():
                     warnings.filterwarnings("ignore")
+                    
+                    ffmpeg_params = get_imageio_settings(fps=output_fps, quality=None)
+                    if 'nvenc' in ffmpeg_params:
+                        ffmpeg_params.extend(['-preset', 'p4'])
+                    else:
+                        ffmpeg_params.extend(['-preset', 'medium'])
+                    ffmpeg_params.extend(['-crf', str(crf), '-loglevel', 'error'])
+
                     # Use ffmpeg_params with CRF for quality control
                     imageio.mimwrite(
                         temp_video_path, 
                         processed_frames, 
                         fps=output_fps,
-                        ffmpeg_params=['-crf', str(crf), '-preset', 'medium', '-loglevel', 'error']
+                        ffmpeg_params=ffmpeg_params
                     )
             reader.close()
 
@@ -784,8 +801,13 @@ class ToolboxProcessor:
             # --- CORRECTED AUDIO MUXING LOGIC ---
             if self.has_ffmpeg and self._has_audio_stream(video_path):
                 print("Muxing audio into processed video...")
+                
+                gpu_encoder = get_gpu_encoder()
+                hwaccel_args = get_gpu_decoder_args()
+                
                 mux_cmd = [
-                    self.ffmpeg_exe, "-y",
+                    self.ffmpeg_exe, "-y"
+                ] + hwaccel_args + [
                     "-i", str(temp_video_path),
                     "-i", video_path,
                     "-c:v", "copy"
