@@ -286,7 +286,12 @@ def is_ffmpeg_available():
 def save_video(frames, save_path, fps=30, quality=5, progress_desc="Saving video..."):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
     ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
-    with imageio.get_writer(save_path, fps=fps, ffmpeg_params=ffmpeg_params, macro_block_size=1) as writer:
+    if isinstance(ffmpeg_params, tuple):
+        codec, params = ffmpeg_params
+    else:
+        codec, params = 'libx264', ffmpeg_params
+        
+    with imageio.get_writer(save_path, fps=fps, codec=codec, ffmpeg_params=params, macro_block_size=1) as writer:
         for i in tqdm(range(frames.shape[0]), desc=f"[FlashVSR] {progress_desc}"):
             frame_np = (frames[i].cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
             writer.append_data(frame_np)
@@ -448,7 +453,12 @@ def stitch_video_tiles(
             readers = [imageio.get_reader(p) for p in tile_paths]
 
         ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
-        with imageio.get_writer(output_path, fps=fps, ffmpeg_params=ffmpeg_params, macro_block_size=1) as writer:
+        if isinstance(ffmpeg_params, tuple):
+            codec, params = ffmpeg_params
+        else:
+            codec, params = 'libx264', ffmpeg_params
+            
+        with imageio.get_writer(output_path, fps=fps, codec=codec, ffmpeg_params=params, macro_block_size=1) as writer:
             for start_frame in tqdm(range(0, num_frames, chunk_size), desc="[FlashVSR] Stitching Chunks"):
                 end_frame = min(start_frame + chunk_size, num_frames)
                 current_chunk_size = end_frame - start_frame

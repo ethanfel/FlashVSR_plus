@@ -106,7 +106,12 @@ def save_video(frames, save_path, fps=30, quality=5):
     frames_np = (frames.cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
     
     ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
-    w = imageio.get_writer(save_path, fps=fps, ffmpeg_params=ffmpeg_params)
+    if isinstance(ffmpeg_params, tuple):
+        codec, params = ffmpeg_params
+    else:
+        codec, params = 'libx264', ffmpeg_params
+        
+    w = imageio.get_writer(save_path, fps=fps, codec=codec, ffmpeg_params=params)
     for frame_np in tqdm(frames_np, desc=f"[FlashVSR] Saving video"):
         w.append_data(frame_np)
     w.close()
@@ -367,11 +372,17 @@ def stitch_video_tiles(
         if num_frames is None or num_frames <= 0:
             num_frames = len([_ for _ in readers[0]])
             for r in readers: r.close()
-            # Get GPU settings for stitching
-            ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
+            readers = [imageio.get_reader(p) for p in tile_paths]
+            
+        # Get GPU settings for stitching
+        ffmpeg_params = get_imageio_settings(fps=fps, quality=quality)
+        if isinstance(ffmpeg_params, tuple):
+            codec, params = ffmpeg_params
+        else:
+            codec, params = 'libx264', ffmpeg_params
             
         # 打开最终的写入器
-        with imageio.get_writer(output_path, fps=fps, ffmpeg_params=ffmpeg_params) as writer:
+        with imageio.get_writer(output_path, fps=fps, codec=codec, ffmpeg_params=params) as writer:
             
             # 2. 按 chunk_size 遍历所有帧
             # tqdm 现在描述的是处理了多少个“块”

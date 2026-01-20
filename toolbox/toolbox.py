@@ -701,18 +701,24 @@ class ToolboxProcessor:
                     raise gr.Error("❌ RIFE model failed to download or load. Please check your internet connection and try again. If the problem persists, try manually deleting the 'toolbox/model_rife' folder and restarting.")
                 temp_video_path = self._generate_output_path(video_path, "frames_temp", is_temp=True)
                 
-                ffmpeg_params = get_imageio_settings(fps=output_fps, quality=None) # Quality handled by CRF in params anyway or we can add it
-                # Override preset if needed
-                if 'nvenc' in ffmpeg_params:
-                    ffmpeg_params.extend(['-preset', 'p4'])
+                ffmpeg_params = get_imageio_settings(fps=output_fps, quality=None)
+                if isinstance(ffmpeg_params, tuple):
+                    codec, params = ffmpeg_params
                 else:
-                    ffmpeg_params.extend(['-preset', 'medium'])
-                ffmpeg_params.extend(['-crf', str(crf)])
+                    codec, params = 'libx264', ffmpeg_params
+                
+                # Override preset if needed
+                if 'nvenc' in codec:
+                    params.extend(['-preset', 'p4'])
+                else:
+                    params.extend(['-preset', 'medium'])
+                params.extend(['-crf', str(crf)])
 
                 writer = imageio.get_writer(
                     temp_video_path, 
                     fps=output_fps,
-                    ffmpeg_params=ffmpeg_params
+                    codec=codec,
+                    ffmpeg_params=params
                 )
                 frame_iterator = iter(reader)
                 frame1 = next(frame_iterator, None)
@@ -776,18 +782,24 @@ class ToolboxProcessor:
                     warnings.filterwarnings("ignore")
                     
                     ffmpeg_params = get_imageio_settings(fps=output_fps, quality=None)
-                    if 'nvenc' in ffmpeg_params:
-                        ffmpeg_params.extend(['-preset', 'p4'])
+                    if isinstance(ffmpeg_params, tuple):
+                        codec, params = ffmpeg_params
                     else:
-                        ffmpeg_params.extend(['-preset', 'medium'])
-                    ffmpeg_params.extend(['-crf', str(crf), '-loglevel', 'error'])
+                        codec, params = 'libx264', ffmpeg_params
+
+                    if 'nvenc' in codec:
+                        params.extend(['-preset', 'p4'])
+                    else:
+                        params.extend(['-preset', 'medium'])
+                    params.extend(['-crf', str(crf), '-loglevel', 'error'])
 
                     # Use ffmpeg_params with CRF for quality control
                     imageio.mimwrite(
                         temp_video_path, 
                         processed_frames, 
                         fps=output_fps,
-                        ffmpeg_params=ffmpeg_params
+                        codec=codec,
+                        ffmpeg_params=params
                     )
             reader.close()
 
