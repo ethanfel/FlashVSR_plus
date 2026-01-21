@@ -44,11 +44,11 @@ class UpscalingSelectionRequest(BaseModel):
     half_res_preprocess: bool = False
     mode: str = "tiny"
     model_version: str = "v1.1"
-    scale: int = 2
-    enable_chunks: bool = False
-    chunk_duration: float = 5.0
-    tiled_vae: bool = True
-    tiled_dit: bool = True
+    scale: int = 1
+    enable_chunks: bool = True
+    chunk_duration: float = 15.0
+    tiled_vae: bool = False
+    tiled_dit: bool = False
     tile_size: int = 256
     tile_overlap: int = 24
     
@@ -56,7 +56,7 @@ class UpscalingSelectionRequest(BaseModel):
     color_fix: bool = True
     unload_dit: bool = False
     dtype_str: str = "bf16"
-    seed: int = 0
+    seed: int = 1
     device: str = "auto"
     fps_override: int = 30
     quality: int = 5
