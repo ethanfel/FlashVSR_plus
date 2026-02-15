@@ -2784,6 +2784,97 @@ def create_ui():
     # Combine all theme names for dropdown
     ALL_THEME_NAMES = list(BUILTIN_THEMES.keys()) + list(COMMUNITY_THEMES.keys()) + ["Custom"]
     
+    def get_sageattention_status():
+        """Check SageAttention install status and GPU info."""
+        lines = []
+        try:
+            major, minor = torch.cuda.get_device_capability()
+            gpu_name = torch.cuda.get_device_name()
+            lines.append(f"GPU: {gpu_name} (sm_{major}{minor})")
+        except Exception:
+            lines.append("GPU: not detected")
+            major, minor = 0, 0
+
+        try:
+            import sageattention
+            lines.append("SageAttention: installed (pip)")
+        except ImportError:
+            lines.append("SageAttention: not installed")
+            lines.append("Using local Triton sparse kernels with SDPA fallback")
+
+        if major >= 12:
+            lines.append("Blackwell GPU detected — must build from source")
+        elif major >= 8:
+            lines.append("pip install sageattention should work for this GPU")
+
+        return "\n".join(lines)
+
+    def build_sageattention(progress=gr.Progress(track_tqdm=False)):
+        """Build SageAttention from source for the current GPU."""
+        try:
+            major, minor = torch.cuda.get_device_capability()
+        except Exception:
+            raise gr.Error("No CUDA GPU detected. Cannot build SageAttention.")
+
+        arch = f"{major}.{minor}"
+        log(f"Building SageAttention for sm_{major}{minor} (TORCH_CUDA_ARCH_LIST={arch})...", message_type="info")
+
+        # Check prerequisites
+        progress(0.05, desc="Checking prerequisites...")
+        for pkg in ["ninja", "setuptools", "wheel"]:
+            try:
+                __import__(pkg)
+            except ImportError:
+                log(f"Installing {pkg}...", message_type="info")
+                subprocess.check_call([sys.executable, "-m", "pip", "install", pkg],
+                                      stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+        # Clone or update repo
+        build_dir = os.path.join(tempfile.gettempdir(), "SageAttention_build")
+        repo_dir = os.path.join(build_dir, "SageAttention")
+        os.makedirs(build_dir, exist_ok=True)
+
+        progress(0.15, desc="Cloning SageAttention repo...")
+        if os.path.isdir(repo_dir):
+            log("Updating existing SageAttention clone...", message_type="info")
+            subprocess.run(["git", "-C", repo_dir, "pull"], capture_output=True)
+        else:
+            log("Cloning SageAttention...", message_type="info")
+            result = subprocess.run(
+                ["git", "clone", "https://github.com/thu-ml/SageAttention.git", repo_dir],
+                capture_output=True, text=True
+            )
+            if result.returncode != 0:
+                raise gr.Error(f"git clone failed: {result.stderr}")
+
+        # Build
+        progress(0.3, desc=f"Building for sm_{major}{minor} (this may take a few minutes)...")
+        log(f"Running setup.py install with TORCH_CUDA_ARCH_LIST={arch}", message_type="info")
+        env = os.environ.copy()
+        env["TORCH_CUDA_ARCH_LIST"] = arch
+        result = subprocess.run(
+            [sys.executable, "setup.py", "install"],
+            cwd=repo_dir, env=env,
+            capture_output=True, text=True, timeout=600
+        )
+
+        if result.returncode != 0:
+            error_tail = result.stderr[-1000:] if result.stderr else result.stdout[-1000:]
+            log(f"Build failed:\n{error_tail}", message_type="error")
+            raise gr.Error(f"Build failed. Check logs for details.\n{error_tail[-200:]}")
+
+        progress(0.95, desc="Verifying installation...")
+        # Verify
+        try:
+            import importlib
+            if "sageattention" in sys.modules:
+                del sys.modules["sageattention"]
+            importlib.import_module("sageattention")
+            log("SageAttention built and installed successfully!", message_type="finish")
+            return get_sageattention_status()
+        except ImportError as e:
+            raise gr.Error(f"Build completed but import still fails: {e}")
+
     with gr.Blocks(css=css, theme=selected_theme) as demo:
         output_file_path = gr.State(None)
         completion_status = gr.State(None)
@@ -3080,12 +3171,29 @@ def create_ui():
                                     info="Reduces VRAM usage during decoding (slight speed cost)"
                                 )
                                 unload_dit_checkbox = gr.Checkbox(
-                                    label="Unload DiT Before Decoding", 
-                                    value=False, 
+                                    label="Unload DiT Before Decoding",
+                                    value=False,
                                     info="Frees VRAM before VAE decode (slower but saves memory)"
                                 )
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                sage_status = gr.Textbox(
+                                    value=get_sageattention_status(),
+                                    label="SageAttention Status",
+                                    lines=3,
+                                    interactive=False,
+                                )
+                            with gr.Column(scale=1):
+                                build_sage_btn = gr.Button(
+                                    "Build SageAttention",
+                                    variant="secondary",
+                                )
+                                build_sage_btn.click(
+                                    fn=build_sageattention,
+                                    outputs=[sage_status],
+                                )
 
-                # --- Main Tab's VideoSlider output ---  
+                # --- Main Tab's VideoSlider output ---
                 with gr.Row():
                     video_slider_output = VideoSlider(
                         label="Video Comparison",
@@ -3314,11 +3422,28 @@ def create_ui():
                                     info="Reduces VRAM usage during decoding (slight speed cost)"
                                 )
                                 img_unload_dit = gr.Checkbox(
-                                    label="Unload DiT Before Decoding", 
-                                    value=False, 
+                                    label="Unload DiT Before Decoding",
+                                    value=False,
                                     info="Frees VRAM before VAE decode (slower but saves memory)"
                                 )
-                
+                        with gr.Row():
+                            with gr.Column(scale=2):
+                                img_sage_status = gr.Textbox(
+                                    value=get_sageattention_status(),
+                                    label="SageAttention Status",
+                                    lines=3,
+                                    interactive=False,
+                                )
+                            with gr.Column(scale=1):
+                                img_build_sage_btn = gr.Button(
+                                    "Build SageAttention",
+                                    variant="secondary",
+                                )
+                                img_build_sage_btn.click(
+                                    fn=build_sageattention,
+                                    outputs=[img_sage_status],
+                                )
+
                 # --- ImageSlider Comparison Window ---
                 with gr.Row():
                     img_comparison = gr.ImageSlider(
