@@ -1,7 +1,7 @@
 # ============================================================================
 # FlashVSR+ Docker Image — Blackwell (RTX 6000 Pro / RTX 50xx) compatible
 #
-# Pinned to PyTorch 2.11.0 nightly (2026-01-27) + CUDA 12.8 for sm_120.
+# Pinned to PyTorch 2.11.0 nightly (2026-02-15) + CUDA 12.8 for sm_120.
 # SageAttention is built from source since no stable pip wheel supports sm_120.
 #
 # No stable PyTorch release supports Blackwell as of Feb 2026.
@@ -18,14 +18,14 @@
 #     flashvsr-plus python api.py
 #
 # To update the nightly pin, check available versions:
-#   pip index versions torch --index-url https://download.pytorch.org/whl/nightly/cu128
+#   pip index versions torch --pre --index-url https://download.pytorch.org/whl/nightly/cu128
 # Then update TORCH_NIGHTLY_VERSION below.
 # ============================================================================
 
 # --- Pinned nightly version (update this to roll forward) ---
-ARG TORCH_NIGHTLY_VERSION=2.11.0.dev20260127
-ARG TORCHVISION_NIGHTLY_VERSION=0.26.0.dev20260127
-ARG TORCHAUDIO_NIGHTLY_VERSION=2.11.0.dev20260127
+ARG TORCH_NIGHTLY_VERSION=2.11.0.dev20260215
+ARG TORCHVISION_NIGHTLY_VERSION=0.26.0.dev20260215
+ARG TORCHAUDIO_NIGHTLY_VERSION=2.11.0.dev20260215
 ARG PYTHON_VERSION=3.12
 
 # ============================================================================
@@ -50,7 +50,7 @@ RUN ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
     ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python
 
 # Install pinned PyTorch nightly with CUDA 12.8 (required for sm_120 / Blackwell)
-RUN pip install --no-cache-dir --break-system-packages \
+RUN pip install --no-cache-dir --break-system-packages --pre \
     torch==${TORCH_NIGHTLY_VERSION}+cu128 \
     torchvision==${TORCHVISION_NIGHTLY_VERSION}+cu128 \
     torchaudio==${TORCHAUDIO_NIGHTLY_VERSION}+cu128 \
@@ -93,7 +93,7 @@ RUN ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
 WORKDIR /app
 
 # Install pinned PyTorch nightly with CUDA 12.8 (sm_120 / Blackwell support)
-RUN pip install --no-cache-dir --break-system-packages \
+RUN pip install --no-cache-dir --break-system-packages --pre \
     torch==${TORCH_NIGHTLY_VERSION}+cu128 \
     torchvision==${TORCHVISION_NIGHTLY_VERSION}+cu128 \
     torchaudio==${TORCHAUDIO_NIGHTLY_VERSION}+cu128 \
