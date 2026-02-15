@@ -133,7 +133,7 @@ cd .. && pip install -r requirements.txt
 Models are auto-downloaded from HuggingFace on first run to `models/FlashVSR/`.
 
 ### Docker (Blackwell-ready)
-The Dockerfile uses a multi-stage build with CUDA 12.8 + PyTorch nightly + SageAttention compiled from source:
+The Dockerfile uses a multi-stage build with CUDA 12.8 + PyTorch nightly + SageAttention compiled from source. All Python package installs use [uv](https://github.com/astral-sh/uv) instead of pip for faster parallel downloads and safer CUDA extension builds (`--no-build-isolation`):
 ```bash
 docker build -t flashvsr-plus .
 docker run --gpus all -p 7860:7860 -v flashvsr-models:/app/models flashvsr-plus
