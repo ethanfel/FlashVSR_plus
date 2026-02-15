@@ -133,7 +133,7 @@ cd .. && pip install -r requirements.txt
 Models are auto-downloaded from HuggingFace on first run to `models/FlashVSR/`.
 
 ### Docker (Blackwell-ready)
-The Dockerfile uses a multi-stage build with CUDA 12.8 + PyTorch nightly + SageAttention compiled from source:
+The Dockerfile uses CUDA 12.8 runtime + PyTorch nightly. All Python package installs use [uv](https://github.com/astral-sh/uv) instead of pip for faster parallel downloads. SageAttention is **not** compiled at build time — the local Triton kernels in `src/models/sparse_sage/` are JIT-compiled on the user's GPU at runtime, with automatic SDPA fallback:
 ```bash
 docker build -t flashvsr-plus .
 docker run --gpus all -p 7860:7860 -v flashvsr-models:/app/models flashvsr-plus
