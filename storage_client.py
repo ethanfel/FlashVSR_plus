@@ -145,6 +145,7 @@ class AmazonS3Client:
             return {"etag": None, "version_id": None}
         except Exception as e:
             print(f"There was an issue with uploading: {e}")
+            return None
 
     async def download_file(self, object_name, file_path):
         func = self.client.download_file

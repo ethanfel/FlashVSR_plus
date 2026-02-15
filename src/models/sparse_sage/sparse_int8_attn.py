@@ -19,6 +19,25 @@ import triton
 import triton.language as tl
 import torch.nn.functional as F
 
+
+def _get_triton_num_stages():
+    """Select optimal num_stages based on GPU architecture.
+    Newer architectures (Blackwell, etc.) benefit from more pipeline stages
+    due to larger L1 caches and improved memory hierarchy.
+    """
+    if not torch.cuda.is_available():
+        return 4
+    try:
+        major, minor = torch.cuda.get_device_capability()
+        if major >= 12:   # Blackwell (sm_120+)
+            return 5
+        elif major >= 10:  # Hopper (sm_100+)
+            return 5
+        else:             # Ada, Ampere, older
+            return 4
+    except Exception:
+        return 4
+
 @triton.jit
 def _attn_fwd_inner(acc, l_i, old_m, q, q_scale, kv_len,
                     K_ptrs, K_bid_ptr, K_scale_ptr, V_ptrs, stride_kn, stride_vn, start_m,  
@@ -119,6 +138,7 @@ def _attn_fwd(Q, K, K_blkid, V, Q_scale, K_scale, Out,
 def forward(q, k, k_block_id, v, q_scale, k_scale, is_causal=False, tensor_layout="HND", output_dtype=torch.float16):
     BLOCK_M = 128
     BLOCK_N = 64
+    NUM_STAGES = _get_triton_num_stages()
     stage = 3 if is_causal else 1
     o = torch.empty(q.shape, dtype=output_dtype, device=q.device)
 
@@ -158,5 +178,5 @@ def forward(q, k, k_block_id, v, q_scale, k_scale, is_causal=False, tensor_layou
         BLOCK_M=BLOCK_M, BLOCK_N=BLOCK_N, HEAD_DIM=HEAD_DIM_K,  
         STAGE=stage,  
         num_warps=4 if head_dim == 64 else 8,
-        num_stages=4)
+        num_stages=NUM_STAGES)
     return o

@@ -1,0 +1,34 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*.egg-info
+dist/
+build/
+.eggs/
+venv/
+.env
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+*.log
+
+# Runtime artifacts
+_temp/
+outputs/
+webui_config
+
+# Models are downloaded at runtime or mounted as volume
+models/FlashVSR/
+models/FlashVSR-v1.1/
+
+# Docker
+Dockerfile
+.dockerignore

@@ -19,7 +19,7 @@ ffmpeg-python~=0.2.0
 huggingface_hub>=1.0.0,<2.0.0
 hf-xet~=1.2.0
 
-# System monitoring
+# System monitoring & storage
 psutil~=7.1.0
 minio==7.2.16
 boto3==1.40.34
@@ -28,7 +28,19 @@ pydantic-settings==2.10.1
 fastapi==0.128.0
 uvicorn==0.40.0
 loguru==0.7.3
-torch==2.7.0
-torchvision==0.22.0
-torchaudio==2.7.0
-sageattention
+
+# PyTorch — install BEFORE this file via the appropriate index URL:
+#
+#   Ampere/Ada (stable):
+#     pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu124
+#
+#   Blackwell RTX 50xx / RTX 6000 Pro (sm_120) — requires nightly + CUDA 12.8:
+#     pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+#
+# Do NOT install torch from this file — the correct wheel depends on your GPU.
+# The Dockerfile handles this automatically.
+
+# SageAttention — on Blackwell GPUs this must be built from source or installed
+# from a compatible wheel (see https://github.com/mobcat40/sageattention-blackwell).
+# On older GPUs, pip install works directly:
+# sageattention

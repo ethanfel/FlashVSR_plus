@@ -1,0 +1,41 @@
+services:
+  webui:
+    build: .
+    image: flashvsr-plus:latest
+    ports:
+      - "7860:7860"
+    volumes:
+      - flashvsr-models:/app/models
+      - flashvsr-outputs:/app/outputs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+
+  api:
+    build: .
+    image: flashvsr-plus:latest
+    command: ["python", "api.py"]
+    ports:
+      - "8000:8000"
+    volumes:
+      - flashvsr-models:/app/models
+      - flashvsr-outputs:/app/outputs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    restart: unless-stopped
+    profiles:
+      - api
+
+volumes:
+  flashvsr-models:
+  flashvsr-outputs:

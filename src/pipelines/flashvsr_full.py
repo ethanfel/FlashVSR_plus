@@ -514,7 +514,12 @@ class TeaCache:
         else:
             coefficients = self.coefficients
             rescale_func = np.poly1d(coefficients)
-            self.accumulated_rel_l1_distance += rescale_func(((modulated_inp-self.previous_modulated_input).abs().mean() / self.previous_modulated_input.abs().mean()).cpu().item())
+            denominator = self.previous_modulated_input.abs().mean()
+            if denominator > 1e-10:
+                ratio = ((modulated_inp - self.previous_modulated_input).abs().mean() / denominator).cpu().item()
+            else:
+                ratio = 0.0
+            self.accumulated_rel_l1_distance += rescale_func(ratio)
             should_calc = not (self.accumulated_rel_l1_distance < self.rel_l1_thresh)
             if should_calc:
                 self.accumulated_rel_l1_distance = 0

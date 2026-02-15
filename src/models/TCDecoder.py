@@ -255,7 +255,7 @@ class TAEHV(nn.Module):
         """Decode a sequence of frames from latents.
         x: NTCHW latent tensor; returns NTCHW RGB in ~[0, 1].
         """
-        trim_flag = self.mem[-8] is None  # keeps original relative check
+        trim_flag = (len(self.mem) >= 8 and self.mem[-8] is None) if self.mem else True
 
         if cond is not None:
             x = torch.cat([self.pixel_shuffle(cond), x], dim=2)
@@ -277,10 +277,10 @@ class DotDict(dict):
     __setattr__ = dict.__setitem__
 
 class TAEW2_1DiffusersWrapper(nn.Module):
-    def __init__(self, pretrained_path=None, channels = [256, 128, 64, 64]):
+    def __init__(self, pretrained_path=None, channels = [256, 128, 64, 64], device="cuda", dtype=torch.bfloat16):
         super().__init__()
-        self.dtype = torch.bfloat16
-        self.device = "cuda"
+        self.dtype = dtype
+        self.device = device if torch.cuda.is_available() or device != "cuda" else "cpu"
         self.taehv = TAEHV(pretrained_path, channels = channels).to(self.dtype)
         self.temperal_downsample = [True, True, False]  # [sic]
         self.config = DotDict(scaling_factor=1.0, latents_mean=torch.zeros(16), z_dim=16, latents_std=torch.ones(16))
