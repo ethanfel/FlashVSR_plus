@@ -291,11 +291,69 @@ def save_video(frames, save_path, fps=30, quality=5, progress_desc="Saving video
         codec, params = ffmpeg_params
     else:
         codec, params = 'libx264', ffmpeg_params
-        
+
     with imageio.get_writer(save_path, fps=fps, codec=codec, ffmpeg_params=params, macro_block_size=1) as writer:
         for i in tqdm(range(frames.shape[0]), desc=f"[FlashVSR] {progress_desc}"):
             frame_np = (frames[i].cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
             writer.append_data(frame_np)
+
+def save_image_sequence(frames, save_dir, fmt="png"):
+    """Save a tensor of frames (N, H, W, C) as numbered images in save_dir."""
+    os.makedirs(save_dir, exist_ok=True)
+    for i in tqdm(range(frames.shape[0]), desc="[FlashVSR] Saving image sequence..."):
+        frame_np = (frames[i].cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
+        Image.fromarray(frame_np).save(os.path.join(save_dir, f"{i:06d}.{fmt}"))
+    return save_dir
+
+def resolve_imgseq_folder(zip_path, folder_path):
+    """Resolve image sequence input to a folder path. Returns (folder, error_msg)."""
+    if zip_path:
+        if zip_path.lower().endswith('.zip') and os.path.isfile(zip_path):
+            return extract_zip_to_temp(zip_path), None
+        return None, "Uploaded file is not a valid .zip"
+    if folder_path and folder_path.strip():
+        p = folder_path.strip()
+        if os.path.isdir(p):
+            return p, None
+        return None, f"Folder not found: {p}"
+    return None, None
+
+def analyze_imgseq_folder(folder):
+    """Return (info_html, frame_count) for an image sequence folder."""
+    if not folder or not os.path.isdir(folder):
+        return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center; font-size: 0.9em;">Upload .zip or set folder path to see frame info</div>', 0
+    images = list_images_natural(folder)
+    count = len(images)
+    if count == 0:
+        return '<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; color: #856404; text-align: center; font-size: 0.9em;">No supported images found in folder</div>', 0
+    with Image.open(images[0]) as img:
+        w, h = img.size
+    exts = set(os.path.splitext(f)[1].lower() for f in images)
+    html = (
+        f'<div style="padding: 8px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 6px; color: #155724; font-size: 0.9em;">'
+        f'<b>{count}</b> frames &mdash; {w}&times;{h} &mdash; {", ".join(sorted(exts))}</div>'
+    )
+    return html, count
+
+def trim_imgseq_to_temp(folder, frame_start, frame_end):
+    """Create a temp folder with symlinks to a subset of frames. Returns the trimmed folder path."""
+    images = list_images_natural(folder)
+    total = len(images)
+    start = max(0, int(frame_start))
+    end = int(frame_end) if frame_end and int(frame_end) > 0 else total
+    end = min(end, total)
+    if start >= end:
+        raise gr.Error(f"Invalid frame range: start={start} >= end={end} (total {total} frames)")
+    if start == 0 and end == total:
+        return folder  # No trimming needed
+    trimmed_dir = os.path.join(TEMP_DIR, f"trimmed_{uuid.uuid4().hex[:12]}")
+    os.makedirs(trimmed_dir, exist_ok=True)
+    selected = images[start:end]
+    for i, src in enumerate(selected):
+        ext = os.path.splitext(src)[1]
+        dst = os.path.join(trimmed_dir, f"{i:06d}{ext}")
+        os.symlink(os.path.abspath(src), dst)
+    return trimmed_dir
 
 def extract_zip_to_temp(zip_path: str) -> str:
     """Extract a zip file containing an image sequence to a temp directory. Returns the directory path."""
@@ -707,7 +765,12 @@ def init_pipeline(mode, device, dtype, model_version="v1.0"):
         proj_class = Buffer_LQ4x_Proj  # v1.0 uses original buffer projection
         log(f"Initializing FlashVSR v1.0 ({mode} mode)", message_type='info')
     
-    ckpt_path, vae_path, lq_path, tcd_path, prompt_path = [os.path.join(model_path, f) for f in ["diffusion_pytorch_model_streaming_dmd.safetensors", "Wan2.1_VAE.pth", "LQ_proj_in.ckpt", "TCDecoder.ckpt", "../posi_prompt.pth"]]
+    ckpt_path, vae_path, lq_path, tcd_path = [os.path.join(model_path, f) for f in ["diffusion_pytorch_model_streaming_dmd.safetensors", "Wan2.1_VAE.pth", "LQ_proj_in.ckpt", "TCDecoder.ckpt"]]
+    # posi_prompt.pth ships with the repo in models/, but a Docker volume mount
+    # over /app/models shadows it. Fall back to the copy at the repo root.
+    prompt_path = os.path.join(ROOT_DIR, "models", "posi_prompt.pth")
+    if not os.path.exists(prompt_path):
+        prompt_path = os.path.join(ROOT_DIR, "posi_prompt.pth")
     mm = ModelManager(torch_dtype=dtype, device="cpu")
     if mode == "full":
         mm.load_models([ckpt_path, vae_path]); pipe = FlashVSRFullPipeline.from_model_manager(mm, device=device)
@@ -745,6 +808,7 @@ def run_flashvsr_single(
     local_range,
     autosave,
     create_comparison=False,
+    output_format="mp4",
     progress=gr.Progress(track_tqdm=True)
 ):
     if not input_path:
@@ -764,6 +828,7 @@ def run_flashvsr_single(
     input_basename = os.path.splitext(os.path.basename(input_path))[0]
     input_basename = clean_video_filename(input_basename)  # Clean filename to prevent length issues
     timestamp = time.strftime("%Y%m%d-%H%M%S")
+    save_as_imgseq = (output_format == "Image Sequence (PNG)")
     output_filename = f"{input_basename}_{mode}_s{scale}_{timestamp}.mp4"
     output_dir = get_output_dir()
     output_path = os.path.join(output_dir, output_filename)
@@ -956,14 +1021,45 @@ def run_flashvsr_single(
         del pipe; clean_vram()
 
     if final_output_tensor is not None:
-        progress(0.9, desc="Saving final video...")
         # Aggressive cleanup before saving to minimize RAM usage
         del frames  # Free input frames
         clean_vram()
         torch.cuda.empty_cache()
         import gc
         gc.collect()
-        save_video(final_output_tensor, temp_video_path, fps=_fps, quality=quality)
+
+        if save_as_imgseq:
+            progress(0.9, desc="Saving image sequence...")
+            imgseq_name = f"{input_basename}_{mode}_s{scale}_{timestamp}"
+            imgseq_dir = os.path.join(TEMP_DIR, imgseq_name)
+            save_image_sequence(final_output_tensor, imgseq_dir)
+
+            # Create a zip for easy download
+            progress(0.95, desc="Zipping image sequence...")
+            zip_path = os.path.join(TEMP_DIR, f"{imgseq_name}.zip")
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_STORED) as zf:
+                for fname in sorted(os.listdir(imgseq_dir)):
+                    zf.write(os.path.join(imgseq_dir, fname), fname)
+
+            if autosave:
+                save_dir = os.path.join(output_dir, imgseq_name)
+                shutil.copytree(imgseq_dir, save_dir, dirs_exist_ok=True)
+                log(f"Processing complete! Image sequence saved to: {save_dir}", message_type="finish")
+                status_msg = f'<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Processing complete! Image sequence saved to: {save_dir}</div>'
+            else:
+                log(f"Processing complete! Use 'Save Output' to save to outputs folder.", message_type="finish")
+                status_msg = '<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Processing complete! Use \'Save Output\' to save to outputs folder.</div>'
+
+            progress(1, desc="Done!")
+            return (
+                zip_path,       # Downloadable zip file
+                zip_path,       # Path for manual save
+                None,           # No video slider for image sequences
+                status_msg
+            )
+        else:
+            progress(0.9, desc="Saving final video...")
+            save_video(final_output_tensor, temp_video_path, fps=_fps, quality=quality)
 
     # Always save to temp directory first (persists during session)
     temp_output_path = os.path.join(TEMP_DIR, output_filename)
@@ -973,7 +1069,7 @@ def run_flashvsr_single(
         merge_video_with_audio(temp_video_path, input_path, temp_output_path)
     else:
         shutil.move(temp_video_path, temp_output_path)
-    
+
     # Create side-by-side comparison if requested
     comparison_path = None
     if create_comparison and is_video(input_path):
@@ -981,15 +1077,15 @@ def run_flashvsr_single(
         comparison_filename = f"{input_basename}_{mode}_s{scale}_comparison_{timestamp}.mp4"
         comparison_temp_path = os.path.join(TEMP_DIR, comparison_filename)
         comparison_path = create_side_by_side_comparison(input_path, temp_output_path, comparison_temp_path)
-        
+
         # Always save comparison video when it's created (regardless of autosave state)
         if comparison_path:
             comparison_save_path = os.path.join(output_dir, comparison_filename)
             shutil.copy(comparison_path, comparison_save_path)
             log(f"Side-by-side comparison saved to: {comparison_save_path}", message_type="finish")
-    
+
     # Autosave upscaled output to outputs folder if enabled
-    if autosave:  
+    if autosave:
         final_save_path = os.path.join(output_dir, output_filename)
         shutil.copy(temp_output_path, final_save_path)
         log(f"Processing complete! Auto-saved to: {final_save_path}", message_type="finish")
@@ -997,9 +1093,9 @@ def run_flashvsr_single(
     else:
         log(f"Processing complete! Use 'Save Output' to save to outputs folder.", message_type="finish")
         status_msg = '<div style="padding: 1px; background-color: #d4edda; border: 1px solid #c3e6cb; border-radius: 1px; color: #155724;">✅ Processing complete! Use \'Save Output\' to save to outputs folder.</div>'
-    
+
     progress(1, desc="Done!")
-    
+
     # Always display the upscaled output video (not the comparison)
     # This makes the manual save button behavior consistent
     return (
@@ -2725,7 +2821,7 @@ def create_ui():
                                     file_count="single",
                                     type="filepath",
                                     file_types=[".zip"],
-                                    height="320px",
+                                    height="240px",
                                 )
                                 gr.Markdown("**Or** specify a folder path containing images:")
                                 imgseq_folder_path = gr.Textbox(
@@ -2733,6 +2829,19 @@ def create_ui():
                                     label="Folder Path",
                                     show_label=False
                                 )
+                                imgseq_info_html = gr.HTML(
+                                    value='<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center; font-size: 0.9em;">Upload .zip or set folder path to see frame info</div>'
+                                )
+                                with gr.Accordion("✂️ Trim Frame Range", open=False):
+                                    with gr.Row():
+                                        imgseq_frame_start = gr.Number(
+                                            value=0, label="Start Frame", precision=0, minimum=0,
+                                            info="0-indexed first frame to include"
+                                        )
+                                        imgseq_frame_end = gr.Number(
+                                            value=0, label="End Frame", precision=0, minimum=0,
+                                            info="0 = use all frames"
+                                        )
                                 imgseq_run_button = gr.Button("Start Processing", variant="primary", size="sm")
 
                         # Video Pre-Processing Accordion
@@ -2909,9 +3018,15 @@ def create_ui():
                                     info="Temporal attention window. 9 = sharper details, 11 = smoother/more stable"
                                 )
                                 quality_slider = gr.Slider(
-                                    minimum=1, maximum=10, step=1, value=5, 
-                                    label="Output Video Quality", 
+                                    minimum=1, maximum=10, step=1, value=5,
+                                    label="Output Video Quality",
                                     info="Higher = better quality, larger files. 5 = balanced, 8+ = near-lossless (huge files)"
+                                )
+                                output_format_radio = gr.Radio(
+                                    choices=["MP4 Video", "Image Sequence (PNG)"],
+                                    value="MP4 Video",
+                                    label="Output Format",
+                                    info="Save as video or numbered PNG frames (delivered as .zip)"
                                 )
                             with gr.Column(scale=1):
                                 kv_ratio_slider = gr.Slider(
@@ -3648,7 +3763,8 @@ def create_ui():
         def handle_processing(
             input_path, enable_chunks, chunk_duration, mode, model_version, scale, color_fix, tiled_vae,
             tiled_dit, tile_size, tile_overlap, unload_dit, dtype_str, seed, device,
-            fps_override, quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison
+            fps_override, quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
+            output_format
         ):
             if enable_chunks:
                 # Use chunk processing mode (comparison not supported in chunk mode)
@@ -3662,26 +3778,29 @@ def create_ui():
                 return run_flashvsr_single(
                     input_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size,
                     tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
-                    attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison
+                    attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
+                    output_format=output_format
                 )
-        
+
         def handle_imgseq_processing(
-            zip_path, folder_path, mode, model_version, scale, color_fix, tiled_vae,
+            zip_path, folder_path, frame_start, frame_end,
+            mode, model_version, scale, color_fix, tiled_vae,
             tiled_dit, tile_size, tile_overlap, unload_dit, dtype_str, seed, device,
-            fps_override, quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison
+            fps_override, quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
+            output_format
         ):
-            # Resolve input: prefer uploaded zip, fall back to folder path
-            input_path = None
-            if zip_path:
-                input_path = zip_path
-            elif folder_path and folder_path.strip():
-                input_path = folder_path.strip()
-            if not input_path:
+            folder, err = resolve_imgseq_folder(zip_path, folder_path)
+            if err:
+                raise gr.Error(err)
+            if not folder:
                 raise gr.Error("Please upload a .zip file or specify a folder path.")
+            # Apply frame range trim
+            input_path = trim_imgseq_to_temp(folder, frame_start, frame_end)
             return run_flashvsr_single(
                 input_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size,
                 tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
-                attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison
+                attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
+                output_format=output_format
             )
 
         def should_randomize_seed(current_seed, randomize):
@@ -3709,7 +3828,8 @@ def create_ui():
                 mode_radio, model_version_radio, scale_slider, color_fix_checkbox, tiled_vae_checkbox,
                 tiled_dit_checkbox, tile_size_slider, tile_overlap_slider, unload_dit_checkbox,
                 dtype_radio, seed_number, device_textbox, fps_number, quality_slider, attention_mode_radio,
-                sparse_ratio_slider, kv_ratio_slider, local_range_slider, autosave_checkbox, create_comparison_checkbox
+                sparse_ratio_slider, kv_ratio_slider, local_range_slider, autosave_checkbox, create_comparison_checkbox,
+                output_format_radio
             ],
             outputs=[video_output, output_file_path, video_slider_output, completion_status]
         ).then(
@@ -3749,11 +3869,12 @@ def create_ui():
         ).then(
             fn=handle_imgseq_processing,
             inputs=[
-                imgseq_input, imgseq_folder_path,
+                imgseq_input, imgseq_folder_path, imgseq_frame_start, imgseq_frame_end,
                 mode_radio, model_version_radio, scale_slider, color_fix_checkbox, tiled_vae_checkbox,
                 tiled_dit_checkbox, tile_size_slider, tile_overlap_slider, unload_dit_checkbox,
                 dtype_radio, seed_number, device_textbox, fps_number, quality_slider, attention_mode_radio,
-                sparse_ratio_slider, kv_ratio_slider, local_range_slider, autosave_checkbox, create_comparison_checkbox
+                sparse_ratio_slider, kv_ratio_slider, local_range_slider, autosave_checkbox, create_comparison_checkbox,
+                output_format_radio
             ],
             outputs=[video_output, output_file_path, video_slider_output, completion_status]
         ).then(
@@ -3775,6 +3896,33 @@ def create_ui():
             inputs=None,
             outputs=[save_status],
             show_progress="hidden"
+        )
+
+        # Image sequence info update
+        def update_imgseq_info_from_zip(zip_path):
+            if not zip_path:
+                return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center; font-size: 0.9em;">Upload .zip or set folder path to see frame info</div>'
+            folder, err = resolve_imgseq_folder(zip_path, None)
+            if err or not folder:
+                return f'<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; color: #721c24; font-size: 0.9em;">{err or "Invalid input"}</div>'
+            html, _ = analyze_imgseq_folder(folder)
+            return html
+
+        def update_imgseq_info_from_folder(folder_path):
+            if not folder_path or not folder_path.strip():
+                return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center; font-size: 0.9em;">Upload .zip or set folder path to see frame info</div>'
+            html, _ = analyze_imgseq_folder(folder_path.strip())
+            return html
+
+        imgseq_input.change(
+            fn=update_imgseq_info_from_zip,
+            inputs=[imgseq_input],
+            outputs=[imgseq_info_html]
+        )
+        imgseq_folder_path.change(
+            fn=update_imgseq_info_from_folder,
+            inputs=[imgseq_folder_path],
+            outputs=[imgseq_info_html]
         )
 
         # Toggle chunk settings visibility and update preview
