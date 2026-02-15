@@ -35,8 +35,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 ENV GRADIO_SERVER_NAME=0.0.0.0
-# Allow uv to install into the system Python (PEP 668 override for containers)
-ENV UV_SYSTEM_PYTHON=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
@@ -46,8 +44,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libglib2.0-0 \
     && rm -rf /var/lib/apt/lists/*
 
-RUN ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
-    ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python
+# Create a virtual environment and make it the default Python
+ENV VIRTUAL_ENV=/opt/venv
+RUN uv venv --python python${PYTHON_VERSION} $VIRTUAL_ENV
+ENV PATH="$VIRTUAL_ENV/bin:$PATH"
 
 WORKDIR /app
 
