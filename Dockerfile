@@ -50,7 +50,7 @@ RUN ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
     ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python
 
 # Install pinned PyTorch nightly with CUDA 12.8 (required for sm_120 / Blackwell)
-RUN pip install --no-cache-dir --break-system-packages \
+RUN pip install --no-cache-dir --break-system-packages --pre \
     torch==${TORCH_NIGHTLY_VERSION}+cu128 \
     torchvision==${TORCHVISION_NIGHTLY_VERSION}+cu128 \
     torchaudio==${TORCHAUDIO_NIGHTLY_VERSION}+cu128 \
@@ -93,7 +93,7 @@ RUN ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
 WORKDIR /app
 
 # Install pinned PyTorch nightly with CUDA 12.8 (sm_120 / Blackwell support)
-RUN pip install --no-cache-dir --break-system-packages \
+RUN pip install --no-cache-dir --break-system-packages --pre \
     torch==${TORCH_NIGHTLY_VERSION}+cu128 \
     torchvision==${TORCHVISION_NIGHTLY_VERSION}+cu128 \
     torchaudio==${TORCHAUDIO_NIGHTLY_VERSION}+cu128 \
