@@ -278,7 +278,7 @@ def smallest_8n1_geq(n):
     return ((n - 1)//8 + 1)*8 + 1
 
 def is_video(path):
-    return os.path.isfile(path) and path.lower().endswith(('.mp4','.mov','.avi','.mkv'))
+    return os.path.isfile(path) and path.lower().endswith(('.mp4','.mov','.avi','.mkv','.webm'))
 
 def is_ffmpeg_available():
     return shutil.which("ffmpeg") is not None

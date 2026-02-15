@@ -99,7 +99,7 @@ def largest_8n1_leq(n):  # 8n+1
     return 0 if n < 1 else ((n - 1)//8)*8 + 1
 
 def is_video(path): 
-    return os.path.isfile(path) and path.lower().endswith(('.mp4','.mov','.avi','.mkv'))
+    return os.path.isfile(path) and path.lower().endswith(('.mp4','.mov','.avi','.mkv','.webm'))
 
 def save_video(frames, save_path, fps=30, quality=5):
     os.makedirs(os.path.dirname(save_path), exist_ok=True)
