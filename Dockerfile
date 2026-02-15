@@ -1,7 +1,7 @@
 # ============================================================================
 # FlashVSR+ Docker Image — Blackwell (RTX 6000 Pro / RTX 50xx) compatible
 #
-# Pinned to PyTorch 2.11.0 nightly (2026-02-15) + CUDA 12.8 for sm_120.
+# Uses PyTorch nightly + CUDA 12.8 for sm_120 support.
 # Uses uv (https://github.com/astral-sh/uv) instead of pip for faster,
 # parallel dependency resolution and downloads.
 #
@@ -21,23 +21,12 @@
 # Run (API server):
 #   docker run --gpus all -p 8000:8000 -v flashvsr-models:/app/models \
 #     flashvsr-plus python api.py
-#
-# To update the nightly pin, check available versions:
-#   uv pip install --dry-run --pre torch --index-url https://download.pytorch.org/whl/nightly/cu128
-# Then update TORCH_NIGHTLY_VERSION below.
 # ============================================================================
 
-# --- Pinned versions ---
-ARG TORCH_NIGHTLY_VERSION=2.11.0.dev20260215
-ARG TORCHVISION_NIGHTLY_VERSION=0.26.0.dev20260215
-ARG TORCHAUDIO_NIGHTLY_VERSION=2.11.0.dev20260215
 ARG PYTHON_VERSION=3.12
 
 FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 
-ARG TORCH_NIGHTLY_VERSION
-ARG TORCHVISION_NIGHTLY_VERSION
-ARG TORCHAUDIO_NIGHTLY_VERSION
 ARG PYTHON_VERSION
 
 COPY --from=ghcr.io/astral-sh/uv:0.6.6 /uv /uvx /usr/local/bin/
@@ -60,11 +49,9 @@ RUN ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
 
 WORKDIR /app
 
-# Install pinned PyTorch nightly with CUDA 12.8 (sm_120 / Blackwell support)
+# Install latest PyTorch nightly with CUDA 12.8 (sm_120 / Blackwell support)
 RUN uv pip install --system --no-cache --pre \
-    torch==${TORCH_NIGHTLY_VERSION}+cu128 \
-    torchvision==${TORCHVISION_NIGHTLY_VERSION}+cu128 \
-    torchaudio==${TORCHAUDIO_NIGHTLY_VERSION}+cu128 \
+    torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Install remaining Python dependencies
