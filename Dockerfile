@@ -18,7 +18,7 @@
 #     flashvsr-plus python api.py
 #
 # To update the nightly pin, check available versions:
-#   pip index versions torch --index-url https://download.pytorch.org/whl/nightly/cu128
+#   pip index versions torch --pre --index-url https://download.pytorch.org/whl/nightly/cu128
 # Then update TORCH_NIGHTLY_VERSION below.
 # ============================================================================
 
