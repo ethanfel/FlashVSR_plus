@@ -615,11 +615,15 @@ def main(input, mode, scale, color_fix, tiled_vae, tiled_dit, tile_size, tile_ov
             del LQ_tile, output_tile_gpu, processed_tile_cpu, input_tile
             clean_vram()
         
+        del pipe
+        clean_vram()
+
         if mode == "tiny-long":
             stitch_video_tiles(tile_paths=temp_videos, tile_coords=tile_coords, final_dims=(W * scale, H * scale),
                 scale=scale, overlap=tile_overlap, output_path=output, fps=_fps, quality=quality, cleanup=True
             )
             shutil.rmtree(local_temp)
+            return output, _fps
         else:
             weight_sum_canvas[weight_sum_canvas == 0] = 1.0
             final_output = final_output_canvas / weight_sum_canvas

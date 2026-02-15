@@ -98,22 +98,24 @@ def _validate_url(url: str):
         raise HTTPException(status_code=400, detail="URL must include a hostname")
 
     # Block private/internal ranges
+    # Note: urlparse strips brackets from IPv6, so [::1] becomes ::1
     blocked = ("localhost", "127.", "10.", "192.168.", "172.16.", "172.17.",
                "172.18.", "172.19.", "172.20.", "172.21.", "172.22.", "172.23.",
                "172.24.", "172.25.", "172.26.", "172.27.", "172.28.", "172.29.",
-               "172.30.", "172.31.", "169.254.", "0.", "[::1]", "[fc", "[fd")
+               "172.30.", "172.31.", "169.254.", "0.", "::1", "fc", "fd")
     if any(hostname.startswith(b) or hostname == b for b in blocked):
         raise HTTPException(status_code=400, detail="URLs pointing to private/internal addresses are not allowed")
 
 
 def _prune_old_tasks():
     """Remove oldest completed/failed tasks when the history grows too large."""
-    terminal = [(k, v) for k, v in TASKS.items()
-                if v.get("status") in ("completed", "failed", "cancelled")]
-    if len(terminal) > MAX_TASK_HISTORY:
-        # Keep the most recent ones (tasks don't have timestamps, so just trim the oldest by insertion order)
-        for k, _ in terminal[:-MAX_TASK_HISTORY]:
-            TASKS.pop(k, None)
+    with _tasks_lock:
+        terminal = [(k, v) for k, v in TASKS.items()
+                    if v.get("status") in ("completed", "failed", "cancelled")]
+        if len(terminal) > MAX_TASK_HISTORY:
+            # Keep the most recent ones (tasks don't have timestamps, so just trim the oldest by insertion order)
+            for k, _ in terminal[:-MAX_TASK_HISTORY]:
+                TASKS.pop(k, None)
 
 
 async def queue_worker():
@@ -128,7 +130,7 @@ async def run_task_with_semaphore(task_id: str, req: UpscalingSelectionRequest):
     async with SEMAPHORE:
         if task_id in CANCELLED_TASKS:
             TASKS[task_id].update({"status": "cancelled", "message": "Task cancelled before starting"})
-            CANCELLED_TASKS.remove(task_id)
+            CANCELLED_TASKS.discard(task_id)
             return
             
         await run_processing_task(task_id, req)
@@ -299,30 +301,33 @@ async def upload_video(request: VideoUploadRequest, background_tasks: Background
 
 @api_router.post("/videos/{task_id}/upscaling")
 async def start_upscaling(task_id: str, request: UpscalingSelectionRequest):
-    if task_id not in TASKS: raise HTTPException(status_code=404, detail="Task not found")
-    if TASKS[task_id]["status"] != "downloaded":
-        raise HTTPException(status_code=400, detail=f"Video not ready. Status: {TASKS[task_id]['status']}")
-    
-    TASKS[task_id].update({"status": "queued", "message": "Waiting in queue"})
+    with _tasks_lock:
+        if task_id not in TASKS:
+            raise HTTPException(status_code=404, detail="Task not found")
+        if TASKS[task_id]["status"] != "downloaded":
+            raise HTTPException(status_code=400, detail=f"Video not ready. Status: {TASKS[task_id]['status']}")
+        TASKS[task_id].update({"status": "queued", "message": "Waiting in queue"})
     await TASK_QUEUE.put((task_id, request))
     return {"status": "accepted", "message": "Added to queue"}
 
 @api_router.post("/videos/{task_id}/cancel")
 async def cancel_task(task_id: str):
-    if task_id not in TASKS: raise HTTPException(status_code=404, detail="Task not found")
-    
-    current_status = TASKS[task_id].get("status")
-    if current_status in ["completed", "failed", "cancelled"]:
-        return {"message": f"Task already in terminal state: {current_status}"}
-    
-    CANCELLED_TASKS.add(task_id)
-    TASKS[task_id].update({"status": "cancelled", "message": "User requested cancellation"})
+    with _tasks_lock:
+        if task_id not in TASKS:
+            raise HTTPException(status_code=404, detail="Task not found")
+        current_status = TASKS[task_id].get("status")
+        if current_status in ["completed", "failed", "cancelled"]:
+            return {"message": f"Task already in terminal state: {current_status}"}
+        CANCELLED_TASKS.add(task_id)
+        TASKS[task_id].update({"status": "cancelled", "message": "User requested cancellation"})
     return {"status": "success", "message": "Cancellation request received"}
 
 @api_router.get("/videos/{task_id}/status", response_model=VideoStatusResponse)
 async def get_status(task_id: str):
-    if task_id not in TASKS: raise HTTPException(status_code=404, detail="Task not found")
-    task = TASKS[task_id]
+    with _tasks_lock:
+        if task_id not in TASKS:
+            raise HTTPException(status_code=404, detail="Task not found")
+        task = dict(TASKS[task_id])
     return {
         "task_id": task_id,
         "status": task.get("status"),

@@ -812,7 +812,7 @@ def run_flashvsr_single(
 ):
     if not input_path:
         log("No input video provided.", message_type='warning')
-        return None, None, None
+        return None, None, None, None
 
     # --- Parameter Preparation ---
     dtype_map = {"fp16": torch.float16, "bf16": torch.bfloat16}; dtype = dtype_map.get(dtype_str, torch.bfloat16)
@@ -1550,7 +1550,7 @@ def run_flashvsr_image(
         progress(0.05, desc="Preparing image frames...")
         temp_frames_dir = prepare_image_as_frames(image_path)
         if not temp_frames_dir:
-            return None, None, None
+            return None, None, None, '<div style="padding: 1px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 1px; color: #721c24;">Failed to prepare image frames.</div>'
         
         # Process through the video pipeline
         video_output, save_path, slider_data, _ = run_flashvsr_single(

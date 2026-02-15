@@ -374,14 +374,17 @@ class FlashVSRTinyLongPipeline(BasePipeline):
         # noise = noise.to(dtype=self.torch_dtype, device=self.device)
         latents = noise
         
-        writer = imageio.get_writer(output_path, fps=fps, quality=quality)
-
         process_total_num = (num_frames - 1) // 8 - 2
         if process_total_num <= 0:
             raise ValueError(
                 f"Video too short: num_frames={num_frames} requires at least 25 frames "
                 f"(got process_total_num={process_total_num}). Provide a longer input."
             )
+
+        if output_path is None:
+            raise ValueError("output_path is required for the tiny-long pipeline")
+
+        writer = imageio.get_writer(output_path, fps=fps, quality=quality)
         is_stream = True
 
         if self.prompt_emb_posi['stats'] == "offload":
