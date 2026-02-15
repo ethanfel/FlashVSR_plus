@@ -1064,6 +1064,9 @@ def run_flashvsr_single(
     # Always save to temp directory first (persists during session)
     temp_output_path = os.path.join(TEMP_DIR, output_filename)
 
+    if not os.path.exists(temp_video_path):
+        raise gr.Error(f"Pipeline did not produce an output file: {os.path.basename(temp_video_path)}")
+
     if is_video(input_path):
         progress(0.95, desc="Merging audio...")
         merge_video_with_audio(temp_video_path, input_path, temp_output_path)

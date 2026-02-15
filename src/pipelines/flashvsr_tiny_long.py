@@ -491,12 +491,13 @@ class FlashVSRTinyLongPipeline(BasePipeline):
                         self.offload_model()
     
         except Exception as e:
-            print(f"Error: {e}")
-            return False
-                    
-        finally:
             writer.close()
-            
+            raise RuntimeError(f"tiny-long pipeline failed: {e}") from e
+
+        finally:
+            if not writer.closed:
+                writer.close()
+
         return True
 
 
