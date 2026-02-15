@@ -2912,7 +2912,7 @@ def create_ui():
                                 
                         with gr.Group():
                             with gr.Row():
-                                mode_radio = gr.Radio(choices=["tiny", "full"], value="tiny", label="Pipeline Mode", info="'Full' requires 24GB(+) VRAM")
+                                mode_radio = gr.Radio(choices=["tiny", "tiny-long", "full"], value="tiny", label="Pipeline Mode", info="'tiny-long' streams to disk for long videos. 'Full' requires 24GB(+) VRAM")
                                 model_version_radio = gr.Radio(
                                     choices=["v1.0", "v1.1"], 
                                     value="v1.1", 
