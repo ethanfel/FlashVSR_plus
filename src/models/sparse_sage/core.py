@@ -26,7 +26,9 @@ def sparse_sageattn(q, k, v, mask_id = None, is_causal=False, tensor_layout="HND
         mask_id = torch.ones((q.shape[0], q.shape[1], (q.shape[2] + 128 - 1)//128, (q.shape[3] + 64 - 1)//64), dtype=torch.int8, device=q.device) # TODO
 
     output_dtype = q.dtype
-    if output_dtype == torch.bfloat16 or output_dtype == torch.float32:
+    # The Triton kernel internally computes in fp16; convert v for the kernel
+    # then the output is cast back to the original dtype
+    if v.dtype != torch.float16:
         v = v.to(torch.float16)
     
     seq_dim = 1 if tensor_layout == "NHD" else 2

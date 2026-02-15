@@ -290,8 +290,6 @@ def save_video(frames, save_path, fps=30, quality=5, progress_desc="Saving video
         codec, params = ffmpeg_params
     else:
         codec, params = 'libx264', ffmpeg_params
-
-    codec = 'libx264'
         
     with imageio.get_writer(save_path, fps=fps, codec=codec, ffmpeg_params=params, macro_block_size=1) as writer:
         for i in tqdm(range(frames.shape[0]), desc=f"[FlashVSR] {progress_desc}"):
@@ -1022,7 +1020,7 @@ def analyze_output_video(video_path):
         duration = meta.get('duration', 0)
         fps = meta.get('fps', 30)
         size = meta.get('size', (0, 0))
-        width, height = int(size[0]), int(size[1]) if isinstance(size, tuple) else (0, 0)
+        (width, height) = (int(size[0]), int(size[1])) if isinstance(size, tuple) else (0, 0)
         
         # Frame count
         nframes = meta.get('nframes')
@@ -1712,7 +1710,7 @@ def get_video_dimensions(video_path):
         reader = imageio.get_reader(video_path)
         meta = reader.get_meta_data()
         size = meta.get('size', (0, 0))
-        width, height = int(size[0]), int(size[1]) if isinstance(size, tuple) else (0, 0)
+        (width, height) = (int(size[0]), int(size[1])) if isinstance(size, tuple) else (0, 0)
         reader.close()
         return width, height
     except:
@@ -1745,7 +1743,7 @@ def analyze_input_video(video_path):
         duration = meta.get('duration', 0)
         fps = meta.get('fps', 30)
         size = meta.get('size', (0, 0))
-        width, height = int(size[0]), int(size[1]) if isinstance(size, tuple) else (0, 0)
+        (width, height) = (int(size[0]), int(size[1])) if isinstance(size, tuple) else (0, 0)
         
         # Frame count
         nframes = meta.get('nframes')

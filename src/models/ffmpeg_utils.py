@@ -27,7 +27,7 @@ def get_gpu_encoder():
             return 'h264_qsv'
         if 'h264_amf' in encoders:
             return 'h264_amf'
-    except:
+    except (subprocess.SubprocessError, FileNotFoundError, OSError):
         pass
 
     return "libx264" # Fallback

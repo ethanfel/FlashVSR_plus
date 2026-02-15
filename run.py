@@ -156,7 +156,7 @@ def merge_video_with_audio(video_path, audio_source_path):
             try:
                 os.remove(temp)
             except OSError as e:
-                lgo(f"[FlashVSR] Could not remove temporary file '{temp}': {e}", message_type='error')
+                log(f"[FlashVSR] Could not remove temporary file '{temp}': {e}", message_type='error')
     
 def compute_scaled_and_target_dims(w0: int, h0: int, scale: int = 4, multiple: int = 128):
     if w0 <= 0 or h0 <= 0:
@@ -637,7 +637,7 @@ if __name__ == "__main__":
     }
     try:
         dtype = dtype_map[args.dtype]
-    except:
+    except KeyError:
         dtype = torch.bfloat16
         
     if args.attention == "sage":
