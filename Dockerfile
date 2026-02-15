@@ -1,7 +1,7 @@
 # ============================================================================
 # FlashVSR+ Docker Image — Blackwell (RTX 6000 Pro / RTX 50xx) compatible
 #
-# Pinned to PyTorch 2.11.0 nightly (2026-01-27) + CUDA 12.8 for sm_120.
+# Pinned to PyTorch 2.11.0 nightly (2026-02-15) + CUDA 12.8 for sm_120.
 # SageAttention is built from source since no stable pip wheel supports sm_120.
 #
 # No stable PyTorch release supports Blackwell as of Feb 2026.
@@ -23,9 +23,9 @@
 # ============================================================================
 
 # --- Pinned nightly version (update this to roll forward) ---
-ARG TORCH_NIGHTLY_VERSION=2.11.0.dev20260127
-ARG TORCHVISION_NIGHTLY_VERSION=0.25.0.dev20260127
-ARG TORCHAUDIO_NIGHTLY_VERSION=2.11.0.dev20260127
+ARG TORCH_NIGHTLY_VERSION=2.11.0.dev20260215
+ARG TORCHVISION_NIGHTLY_VERSION=0.26.0.dev20260215
+ARG TORCHAUDIO_NIGHTLY_VERSION=2.11.0.dev20260215
 ARG PYTHON_VERSION=3.12
 
 # ============================================================================
