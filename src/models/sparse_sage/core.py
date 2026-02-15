@@ -70,12 +70,12 @@ def sparse_sageattn(q, k, v, mask_id = None, is_causal=False, tensor_layout="HND
     if v.dtype != torch.float16:
         v = v.to(torch.float16)
 
-    seq_dim = 1 if tensor_layout == "NHD" else 2
-    km = k.mean(dim=seq_dim, keepdim=True)
-
-    q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, km=km, tensor_layout=tensor_layout)
-
     try:
+        seq_dim = 1 if tensor_layout == "NHD" else 2
+        km = k.mean(dim=seq_dim, keepdim=True)
+
+        q_int8, q_scale, k_int8, k_scale = per_block_int8(q, k, km=km, tensor_layout=tensor_layout)
+
         o = sparse_sageattn_fwd(
             q_int8, k_int8, mask_id, v, q_scale, k_scale,
             is_causal=is_causal, tensor_layout=tensor_layout, output_dtype=output_dtype
