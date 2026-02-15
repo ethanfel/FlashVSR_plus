@@ -5,7 +5,7 @@ import sys
 import argparse
 
 parser = argparse.ArgumentParser(description="FlashVSR+: Towards Real-Time Diffusion-Based Streaming Video Super-Resolution.")
-parser.add_argument("-i", "--input", type=str, help="Path to video file or folder of images")
+parser.add_argument("-i", "--input", type=str, help="Path to video file, folder of images, or .zip of images")
 parser.add_argument("-s", "--scale", type=int, default=4, help="Upscale factor, default=4")
 parser.add_argument("-m", "--mode", type=str, default="tiny", choices=["tiny", "tiny-long", "full"], help="The type of pipeline to use, default=tiny")
 parser.add_argument("--tiled-vae", action="store_true", help="Enable tile decoding")
@@ -45,6 +45,7 @@ import math
 import uuid
 import torch
 import shutil
+import zipfile
 import imageio
 import ffmpeg
 import numpy as np
@@ -90,8 +91,8 @@ def natural_key(name: str):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r'([0-9]+)', os.path.basename(name))]
 
 def list_images_natural(folder: str):
-    exts = ('.png', '.jpg', '.jpeg', '.PNG', '.JPG', '.JPEG')
-    fs = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(exts)]
+    exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
+    fs = [os.path.join(folder, f) for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in exts]
     fs.sort(key=natural_key)
     return fs
 
@@ -180,7 +181,22 @@ def tensor_upscale_then_center_crop(frame_tensor: torch.Tensor, scale: int, tW: 
     
     return cropped_tensor.squeeze(0)
 
+def extract_zip_to_temp(zip_path: str) -> str:
+    """Extract a zip file containing an image sequence to a temp directory."""
+    extract_dir = os.path.join(os.path.dirname(zip_path), f"imgseq_{uuid.uuid4().hex[:12]}")
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        zf.extractall(extract_dir)
+    entries = [e for e in os.listdir(extract_dir) if not e.startswith('.')]
+    if len(entries) == 1:
+        subdir = os.path.join(extract_dir, entries[0])
+        if os.path.isdir(subdir):
+            return subdir
+    return extract_dir
+
 def prepare_tensors(path: str, dtype=torch.bfloat16):
+    if path.lower().endswith('.zip') and os.path.isfile(path):
+        path = extract_zip_to_temp(path)
     if os.path.isdir(path):
         paths0 = list_images_natural(path)
         if not paths0:

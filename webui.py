@@ -8,6 +8,7 @@ import math
 import uuid
 import torch
 import shutil
+import zipfile
 import imageio
 import ffmpeg
 import numpy as np
@@ -210,8 +211,8 @@ def natural_key(name: str):
     return [int(t) if t.isdigit() else t.lower() for t in re.split(r'([0-9]+)', os.path.basename(name))]
 
 def list_images_natural(folder: str):
-    exts = ('.png', '.jpg', '.jpeg', '.PNG', '.JPG', '.JPEG')
-    fs = [os.path.join(folder, f) for f in os.listdir(folder) if f.endswith(exts)]
+    exts = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff', '.tif', '.webp'}
+    fs = [os.path.join(folder, f) for f in os.listdir(folder) if os.path.splitext(f)[1].lower() in exts]
     fs.sort(key=natural_key)
     return fs
 
@@ -296,7 +297,23 @@ def save_video(frames, save_path, fps=30, quality=5, progress_desc="Saving video
             frame_np = (frames[i].cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
             writer.append_data(frame_np)
 
+def extract_zip_to_temp(zip_path: str) -> str:
+    """Extract a zip file containing an image sequence to a temp directory. Returns the directory path."""
+    extract_dir = os.path.join(TEMP_DIR, f"imgseq_{uuid.uuid4().hex[:12]}")
+    os.makedirs(extract_dir, exist_ok=True)
+    with zipfile.ZipFile(zip_path, 'r') as zf:
+        zf.extractall(extract_dir)
+    # If the zip contains a single subdirectory, use that instead
+    entries = [e for e in os.listdir(extract_dir) if not e.startswith('.')]
+    if len(entries) == 1:
+        subdir = os.path.join(extract_dir, entries[0])
+        if os.path.isdir(subdir):
+            return subdir
+    return extract_dir
+
 def prepare_tensors(path: str, dtype=torch.bfloat16):
+    if path.lower().endswith('.zip') and os.path.isfile(path):
+        path = extract_zip_to_temp(path)
     if os.path.isdir(path):
         paths0 = list_images_natural(path)
         if not paths0: raise FileNotFoundError(f"No images in {path}")
@@ -2702,7 +2719,22 @@ def create_ui():
                                 )
                                 
                                 batch_run_button = gr.Button("Start Batch Processing", variant="primary", size="sm")
-                        
+                            with gr.TabItem("Image Sequence"):
+                                imgseq_input = gr.File(
+                                    label="Upload a .zip of images (png/jpg/bmp/tiff/webp)",
+                                    file_count="single",
+                                    type="filepath",
+                                    file_types=[".zip"],
+                                    height="320px",
+                                )
+                                gr.Markdown("**Or** specify a folder path containing images:")
+                                imgseq_folder_path = gr.Textbox(
+                                    placeholder="e.g., /data/frames/scene_001",
+                                    label="Folder Path",
+                                    show_label=False
+                                )
+                                imgseq_run_button = gr.Button("Start Processing", variant="primary", size="sm")
+
                         # Video Pre-Processing Accordion
                         with gr.Accordion("📊 Video Pre-Processing", open=False):
                             video_analysis_html = gr.HTML(
@@ -3633,12 +3665,31 @@ def create_ui():
                     attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison
                 )
         
+        def handle_imgseq_processing(
+            zip_path, folder_path, mode, model_version, scale, color_fix, tiled_vae,
+            tiled_dit, tile_size, tile_overlap, unload_dit, dtype_str, seed, device,
+            fps_override, quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison
+        ):
+            # Resolve input: prefer uploaded zip, fall back to folder path
+            input_path = None
+            if zip_path:
+                input_path = zip_path
+            elif folder_path and folder_path.strip():
+                input_path = folder_path.strip()
+            if not input_path:
+                raise gr.Error("Please upload a .zip file or specify a folder path.")
+            return run_flashvsr_single(
+                input_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size,
+                tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
+                attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison
+            )
+
         def should_randomize_seed(current_seed, randomize):
             """Generate a new random seed if randomize is checked, otherwise return current seed."""
             if randomize:
                 return random.randint(0, 2**32 - 1)
             return current_seed
-        
+
         run_button.click(
             fn=lambda: gr.update(visible=False),
             inputs=[],
@@ -3682,6 +3733,50 @@ def create_ui():
             show_progress="hidden"
         )
         
+        # Image Sequence processing
+        imgseq_run_button.click(
+            fn=lambda: gr.update(visible=False),
+            inputs=[],
+            outputs=[video_output_analysis_html]
+        ).then(
+            fn=check_model_status,
+            inputs=[model_version_radio],
+            outputs=[save_status]
+        ).then(
+            fn=should_randomize_seed,
+            inputs=[seed_number, randomize_seed],
+            outputs=[seed_number]
+        ).then(
+            fn=handle_imgseq_processing,
+            inputs=[
+                imgseq_input, imgseq_folder_path,
+                mode_radio, model_version_radio, scale_slider, color_fix_checkbox, tiled_vae_checkbox,
+                tiled_dit_checkbox, tile_size_slider, tile_overlap_slider, unload_dit_checkbox,
+                dtype_radio, seed_number, device_textbox, fps_number, quality_slider, attention_mode_radio,
+                sparse_ratio_slider, kv_ratio_slider, local_range_slider, autosave_checkbox, create_comparison_checkbox
+            ],
+            outputs=[video_output, output_file_path, video_slider_output, completion_status]
+        ).then(
+            fn=analyze_output_video,
+            inputs=[output_file_path],
+            outputs=[video_output_analysis_html]
+        ).then(
+            fn=lambda status_msg: status_msg,
+            inputs=[completion_status],
+            outputs=[save_status],
+            show_progress=False
+        ).then(
+            fn=do_sleep,
+            inputs=None,
+            outputs=None,
+            show_progress="hidden"
+        ).then(
+            fn=do_clear,
+            inputs=None,
+            outputs=[save_status],
+            show_progress="hidden"
+        )
+
         # Toggle chunk settings visibility and update preview
         def toggle_chunk_settings(enable_chunks, video_path, chunk_duration):
             if enable_chunks:
