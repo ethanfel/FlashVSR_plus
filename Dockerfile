@@ -42,6 +42,9 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV TORCH_CUDA_ARCH_LIST="8.0;8.6;8.9;12.0"
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
     python3-pip git \
     && rm -rf /var/lib/apt/lists/*
@@ -79,6 +82,9 @@ ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 ENV GRADIO_SERVER_NAME=0.0.0.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    software-properties-common \
+    && add-apt-repository ppa:deadsnakes/ppa \
+    && apt-get update && apt-get install -y --no-install-recommends \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
     python3-pip \
     ffmpeg \
