@@ -63,6 +63,9 @@ RUN uv pip install --no-cache -r requirements.txt
 # Copy application code
 COPY . .
 
+# Preserve posi_prompt.pth so it survives volume mounts over /app/models
+RUN cp /app/models/posi_prompt.pth /app/posi_prompt.pth
+
 # Create directories for runtime
 RUN mkdir -p /app/models /app/outputs /app/_temp
 
