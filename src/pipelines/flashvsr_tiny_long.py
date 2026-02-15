@@ -491,10 +491,7 @@ class FlashVSRTinyLongPipeline(BasePipeline):
                     if unload_dit:
                         del noise_pred_posi, cur_frames, cur_latents, cur_LQ_frame
                         clean_vram()
-                    
-                    if hasattr(self.dit, "LQ_proj_in"):
-                        self.dit.LQ_proj_in.clear_cache()
-                        
+
                     self.TCDecoder.clean_mem()
 
         except Exception as e:
