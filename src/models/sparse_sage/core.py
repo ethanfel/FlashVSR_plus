@@ -28,8 +28,32 @@ _triton_kernel_tested = False
 _triton_kernel_works = True
 
 
-def _sdpa_fallback(q, k, v, is_causal=False, tensor_layout="HND"):
-    """Fallback using PyTorch's native scaled_dot_product_attention."""
+def _expand_block_mask(mask_id, N_q, N_kv, BLOCK_M=128, BLOCK_N=64):
+    """Expand a block-level sparse mask to a full boolean attention mask.
+
+    Args:
+        mask_id: (B, H, num_q_blocks, num_kv_blocks) int8 tensor.
+                 Non-zero means "attend", zero means "skip".
+        N_q: actual query sequence length.
+        N_kv: actual key/value sequence length.
+
+    Returns:
+        Boolean mask (B, H, N_q, N_kv) suitable for SDPA (True = attend).
+    """
+    # repeat_interleave expands each block entry to cover its full range
+    expanded = mask_id.bool()
+    expanded = expanded.repeat_interleave(BLOCK_M, dim=2)[:, :, :N_q, :]
+    expanded = expanded.repeat_interleave(BLOCK_N, dim=3)[:, :, :, :N_kv]
+    return expanded
+
+
+def _sdpa_fallback(q, k, v, mask_id=None, is_causal=False, tensor_layout="HND"):
+    """Fallback using PyTorch's native scaled_dot_product_attention.
+
+    When mask_id is provided the block-level sparse mask is expanded to a
+    full boolean attention mask so that SDPA respects the same sparsity
+    pattern as the Triton kernel, preserving output quality.
+    """
     output_dtype = q.dtype
     if tensor_layout == "HND":
         # q/k/v: (B, H, N, D) — already in the right layout for SDPA
@@ -44,8 +68,14 @@ def _sdpa_fallback(q, k, v, is_causal=False, tensor_layout="HND"):
     k_fp = k.to(q_fp.dtype)
     v_fp = v.to(q_fp.dtype)
 
+    attn_mask = None
+    if mask_id is not None:
+        N_q = q_fp.shape[2]
+        N_kv = k_fp.shape[2]
+        attn_mask = _expand_block_mask(mask_id, N_q, N_kv)
+
     o = torch.nn.functional.scaled_dot_product_attention(
-        q_fp, k_fp, v_fp, is_causal=is_causal
+        q_fp, k_fp, v_fp, attn_mask=attn_mask, is_causal=is_causal
     )
 
     if tensor_layout == "NHD":
@@ -59,7 +89,7 @@ def sparse_sageattn(q, k, v, mask_id = None, is_causal=False, tensor_layout="HND
 
     # Fast path: if we already know the Triton kernel doesn't work, use SDPA
     if _triton_kernel_tested and not _triton_kernel_works:
-        return _sdpa_fallback(q, k, v, is_causal=is_causal, tensor_layout=tensor_layout)
+        return _sdpa_fallback(q, k, v, mask_id=mask_id, is_causal=is_causal, tensor_layout=tensor_layout)
 
     if mask_id is None:
         mask_id = torch.ones((q.shape[0], q.shape[1], (q.shape[2] + 128 - 1)//128, (q.shape[3] + 64 - 1)//64), dtype=torch.int8, device=q.device) # TODO
@@ -96,5 +126,5 @@ def sparse_sageattn(q, k, v, mask_id = None, is_causal=False, tensor_layout="HND
                     "This may happen on Blackwell (sm_120) GPUs if Triton/ptxas "
                     "does not yet support this architecture. Performance may differ."
                 )
-            return _sdpa_fallback(q, k, v, is_causal=is_causal, tensor_layout=tensor_layout)
+            return _sdpa_fallback(q, k, v, mask_id=mask_id, is_causal=is_causal, tensor_layout=tensor_layout)
         raise
