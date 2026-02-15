@@ -3766,21 +3766,26 @@ def create_ui():
             fps_override, quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
             output_format
         ):
-            if enable_chunks:
-                # Use chunk processing mode (comparison not supported in chunk mode)
-                return process_video_with_chunks(
-                    input_path, chunk_duration, mode, model_version, scale, color_fix, tiled_vae, tiled_dit,
-                    tile_size, tile_overlap, unload_dit, dtype_str, seed, device, fps_override,
-                    quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave
-                )
-            else:
-                # Use normal processing
-                return run_flashvsr_single(
-                    input_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size,
-                    tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
-                    attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
-                    output_format=output_format
-                )
+            try:
+                if enable_chunks:
+                    # Use chunk processing mode (comparison not supported in chunk mode)
+                    return process_video_with_chunks(
+                        input_path, chunk_duration, mode, model_version, scale, color_fix, tiled_vae, tiled_dit,
+                        tile_size, tile_overlap, unload_dit, dtype_str, seed, device, fps_override,
+                        quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave
+                    )
+                else:
+                    # Use normal processing
+                    return run_flashvsr_single(
+                        input_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size,
+                        tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
+                        attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
+                        output_format=output_format
+                    )
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                raise gr.Error(f"Processing failed: {e}")
 
         def handle_imgseq_processing(
             zip_path, folder_path, frame_start, frame_end,
@@ -3796,12 +3801,17 @@ def create_ui():
                 raise gr.Error("Please upload a .zip file or specify a folder path.")
             # Apply frame range trim
             input_path = trim_imgseq_to_temp(folder, frame_start, frame_end)
-            return run_flashvsr_single(
-                input_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size,
-                tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
-                attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
-                output_format=output_format
-            )
+            try:
+                return run_flashvsr_single(
+                    input_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size,
+                    tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
+                    attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
+                    output_format=output_format
+                )
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                raise gr.Error(f"Processing failed: {e}")
 
         def should_randomize_seed(current_seed, randomize):
             """Generate a new random seed if randomize is checked, otherwise return current seed."""
