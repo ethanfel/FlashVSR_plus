@@ -244,7 +244,7 @@ class FlashVSRTinyLongPipeline(BasePipeline):
         if context_tensor is None:
             if prompt_path is None:
                 raise ValueError("init_cross_kv: 需要提供 prompt_path 或 context_tensor 其一")
-            ctx = torch.load(prompt_path, map_location=self.device)
+            ctx = torch.load(prompt_path, map_location=self.device, weights_only=False)
         else:
             ctx = context_tensor
 
@@ -292,7 +292,8 @@ class FlashVSRTinyLongPipeline(BasePipeline):
     
     def offload_model(self, keep_vae=False):
         self.dit.clear_cross_kv()
-        self.prompt_emb_posi['stats'] = "offload"
+        if self.prompt_emb_posi is not None:
+            self.prompt_emb_posi['stats'] = "offload"
         self.load_models_to_device([])
         if hasattr(self.dit, "LQ_proj_in"):
             self.dit.LQ_proj_in.to('cpu')
@@ -360,7 +361,7 @@ class FlashVSRTinyLongPipeline(BasePipeline):
         height, width = self.check_resize_height_width(height, width)
         if num_frames % 4 != 1:
             num_frames = (num_frames + 2) // 4 * 4 + 1
-            print(f"Only `num_frames % 4 != 1` is acceptable. We round it up to {num_frames}.")
+            print(f"Only `num_frames % 4 == 1` is acceptable. We round it up to {num_frames}.")
 
         # Tiler 参数
         tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
@@ -373,26 +374,34 @@ class FlashVSRTinyLongPipeline(BasePipeline):
         # noise = noise.to(dtype=self.torch_dtype, device=self.device)
         latents = noise
         
-        writer = imageio.get_writer(output_path, fps=fps, quality=quality)
-
         process_total_num = (num_frames - 1) // 8 - 2
+        if process_total_num <= 0:
+            raise ValueError(
+                f"Video too short: num_frames={num_frames} requires at least 25 frames "
+                f"(got process_total_num={process_total_num}). Provide a longer input."
+            )
+
+        if output_path is None:
+            raise ValueError("output_path is required for the tiny-long pipeline")
+
+        writer = imageio.get_writer(output_path, fps=fps, quality=quality)
         is_stream = True
 
-        if self.prompt_emb_posi['stats'] == "offload":
-            self.init_cross_kv(context_tensor=self.prompt_emb_posi['context'])
-        self.load_models_to_device(["dit"])
-        self.dit.LQ_proj_in.to(self.device)
-        self.TCDecoder.to(self.device)
-        
-        # 清理可能存在的 LQ_proj_in cache
-        if hasattr(self.dit, "LQ_proj_in"):
-            self.dit.LQ_proj_in.clear_cache()
-
-        frames_total = []
-        LQ_pre_idx = 0
-        LQ_cur_idx = 0
-        self.TCDecoder.clean_mem()
         try:
+            if self.prompt_emb_posi['stats'] == "offload":
+                self.init_cross_kv(context_tensor=self.prompt_emb_posi['context'])
+            self.load_models_to_device(["dit"])
+            self.dit.LQ_proj_in.to(self.device)
+            self.TCDecoder.to(self.device)
+
+            # 清理可能存在的 LQ_proj_in cache
+            if hasattr(self.dit, "LQ_proj_in"):
+                self.dit.LQ_proj_in.clear_cache()
+
+            frames_total = []
+            LQ_pre_idx = 0
+            LQ_cur_idx = 0
+            self.TCDecoder.clean_mem()
             with torch.no_grad():
                 for cur_process_idx in progress_bar_cmd(range(process_total_num)):
                     if cur_process_idx == 0:
@@ -459,8 +468,8 @@ class FlashVSRTinyLongPipeline(BasePipeline):
                     cur_frames = self.decode_video(cur_latents, cond=cur_LQ_frame)
     
                     # 颜色校正（wavelet）
-                    try:
-                        if color_fix:
+                    if color_fix:
+                        try:
                             cur_frames = self.ColorCorrector(
                                 cur_frames.to(device=self.device),
                                 cur_LQ_frame,
@@ -468,8 +477,8 @@ class FlashVSRTinyLongPipeline(BasePipeline):
                                 chunk_size=None,
                                 method='adain'
                             )
-                    except:
-                        pass
+                        except Exception as e:
+                            print(f"[FlashVSR] WARNING: Color correction failed, skipping: {e}")
                     
                     num_frames_in_chunk = cur_frames.shape[2]
                     for i in range(num_frames_in_chunk):
@@ -487,16 +496,18 @@ class FlashVSRTinyLongPipeline(BasePipeline):
                         self.dit.LQ_proj_in.clear_cache()
                         
                     self.TCDecoder.clean_mem()
-                    if force_offload:
-                        self.offload_model()
-    
+
         except Exception as e:
-            print(f"Error: {e}")
-            return False
-                    
-        finally:
             writer.close()
-            
+            raise RuntimeError(f"tiny-long pipeline failed: {e}") from e
+
+        finally:
+            if not writer.closed:
+                writer.close()
+
+        if force_offload:
+            self.offload_model()
+
         return True
 
 

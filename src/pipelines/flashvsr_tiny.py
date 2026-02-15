@@ -292,7 +292,8 @@ class FlashVSRTinyPipeline(BasePipeline):
     
     def offload_model(self, keep_vae=False):
         self.dit.clear_cross_kv()
-        self.prompt_emb_posi['stats'] = "offload"
+        if self.prompt_emb_posi is not None:
+            self.prompt_emb_posi['stats'] = "offload"
         self.load_models_to_device([])
         if hasattr(self.dit, "LQ_proj_in"):
             self.dit.LQ_proj_in.to('cpu')
@@ -347,7 +348,7 @@ class FlashVSRTinyPipeline(BasePipeline):
         height, width = self.check_resize_height_width(height, width)
         if num_frames % 4 != 1:
             num_frames = (num_frames + 2) // 4 * 4 + 1
-            print(f"Only `num_frames % 4 != 1` is acceptable. We round it up to {num_frames}.")
+            print(f"Only `num_frames % 4 == 1` is acceptable. We round it up to {num_frames}.")
 
         # Tiler 参数
         tiler_kwargs = {"tiled": tiled, "tile_size": tile_size, "tile_stride": tile_stride}
@@ -361,6 +362,11 @@ class FlashVSRTinyPipeline(BasePipeline):
         latents = noise
 
         process_total_num = (num_frames - 1) // 8 - 2
+        if process_total_num <= 0:
+            raise ValueError(
+                f"Video too short: num_frames={num_frames} requires at least 25 frames "
+                f"(got process_total_num={process_total_num}). Provide a longer input."
+            )
         is_stream = True
         
         if self.prompt_emb_posi['stats'] == "offload":
@@ -459,8 +465,8 @@ class FlashVSRTinyPipeline(BasePipeline):
                 self.offload_model()
                 
             # 颜色校正（wavelet）
-            try:
-                if color_fix:
+            if color_fix:
+                try:
                     frames = self.ColorCorrector(
                         frames.to(device=LQ_video.device),
                         LQ_video[:, :, :frames.shape[2], :, :],
@@ -468,8 +474,8 @@ class FlashVSRTinyPipeline(BasePipeline):
                         chunk_size=16,
                         method='adain'
                     )
-            except:
-                pass
+                except Exception as e:
+                    print(f"[FlashVSR] WARNING: Color correction failed, skipping: {e}")
                 
         return frames[0]
 

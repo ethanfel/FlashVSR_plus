@@ -4,6 +4,11 @@ from typing import List
 from ..configs.model_config import model_loader_configs, huggingface_model_loader_configs, patch_model_loader_configs
 from .utils import load_state_dict, init_weights_on_device, hash_state_dict_keys, split_state_dict_with_prefix
 
+
+def get_lora_loaders():
+    """Placeholder — LoRA loading is not yet implemented in this fork."""
+    return []
+
 def load_model_from_single_file(state_dict, model_names, model_classes, model_resource, torch_dtype, device):
     loaded_model_names, loaded_models = [], []
     for model_name, model_class in zip(model_names, model_classes):
@@ -41,8 +46,8 @@ def load_model_from_huggingface_folder(file_path, model_names, model_classes, to
             model = model.half()
         try:
             model = model.to(device=device)
-        except:
-            pass
+        except Exception as e:
+            print(f"[FlashVSR] WARNING: Could not move {model_name} to {device}: {e}")
         loaded_model_names.append(model_name)
         loaded_models.append(model)
     return loaded_model_names, loaded_models
@@ -143,7 +148,7 @@ class ModelDetectorFromSingleFile:
             loaded_model_names, loaded_models = load_model_from_single_file(state_dict, model_names, model_classes, model_resource, torch_dtype, device)
             return loaded_model_names, loaded_models
 
-        return loaded_model_names, loaded_models
+        raise ValueError(f"No matching model config found for state_dict (hash={keys_hash})")
 
 
 
@@ -177,7 +182,7 @@ class ModelDetectorFromSplitedSingleFile(ModelDetectorFromSingleFile):
             loaded_model_names, loaded_models = [], []
             for sub_state_dict in splited_state_dict:
                 if super().match(file_path, sub_state_dict):
-                    loaded_model_names_, loaded_models_ = super().load(file_path, valid_state_dict, device, torch_dtype)
+                    loaded_model_names_, loaded_models_ = super().load(file_path, sub_state_dict, device, torch_dtype)
                     loaded_model_names += loaded_model_names_
                     loaded_models += loaded_models_
         return loaded_model_names, loaded_models
@@ -255,9 +260,9 @@ class ModelDetectorFromPatchedSingleFile:
         loaded_model_names, loaded_models = [], []
         keys_hash_with_shape = hash_state_dict_keys(state_dict, with_shape=True)
         if keys_hash_with_shape in self.keys_hash_with_shape_dict:
-            model_names, model_classes, extra_kwargs = self.keys_hash_with_shape_dict[keys_hash_with_shape]
+            model_name, model_class, extra_kwargs = self.keys_hash_with_shape_dict[keys_hash_with_shape]
             loaded_model_names_, loaded_models_ = load_patch_model_from_single_file(
-                state_dict, model_names, model_classes, extra_kwargs, model_manager, torch_dtype, device)
+                state_dict, [model_name], [model_class], extra_kwargs, model_manager, torch_dtype, device)
             loaded_model_names += loaded_model_names_
             loaded_models += loaded_models_
         return loaded_model_names, loaded_models

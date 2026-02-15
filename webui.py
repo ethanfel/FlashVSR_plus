@@ -543,9 +543,8 @@ def stitch_video_tiles(
                 for i, reader in enumerate(readers):
                     try:
                         tile_chunk_frames = [
-                            frame.astype(np.float32) / 255.0
-                            for idx, frame in enumerate(reader.iter_data())
-                            if start_frame <= idx < end_frame
+                            reader.get_data(idx).astype(np.float32) / 255.0
+                            for idx in range(start_frame, end_frame)
                         ]
                         tile_chunk_np = np.stack(tile_chunk_frames, axis=0)
                     except Exception as e:
@@ -813,7 +812,7 @@ def run_flashvsr_single(
 ):
     if not input_path:
         log("No input video provided.", message_type='warning')
-        return None, None, None
+        return None, None, None, None
 
     # --- Parameter Preparation ---
     dtype_map = {"fp16": torch.float16, "bf16": torch.bfloat16}; dtype = dtype_map.get(dtype_str, torch.bfloat16)
@@ -877,7 +876,7 @@ def run_flashvsr_single(
                 pipe(
                     LQ_video=LQ_tile, num_frames=F, height=th, width=tw,
                     topk_ratio=sparse_ratio*768*1280/(th*tw),
-                    quality=10, output_path=temp_name, **pipe_kwargs
+                    quality=quality, output_path=temp_name, **pipe_kwargs
                 )
                 temp_videos.append(temp_name); del LQ_tile, input_tile; clean_vram()
 
@@ -1020,13 +1019,14 @@ def run_flashvsr_single(
             del video  # Free the original video tensor
         del pipe; clean_vram()
 
+    # Free input frames early to reduce RAM during post-processing
+    del frames
+    clean_vram()
+    torch.cuda.empty_cache()
+    import gc
+    gc.collect()
+
     if final_output_tensor is not None:
-        # Aggressive cleanup before saving to minimize RAM usage
-        del frames  # Free input frames
-        clean_vram()
-        torch.cuda.empty_cache()
-        import gc
-        gc.collect()
 
         if save_as_imgseq:
             progress(0.9, desc="Saving image sequence...")
@@ -1063,6 +1063,9 @@ def run_flashvsr_single(
 
     # Always save to temp directory first (persists during session)
     temp_output_path = os.path.join(TEMP_DIR, output_filename)
+
+    if not os.path.exists(temp_video_path):
+        raise gr.Error(f"Pipeline did not produce an output file: {os.path.basename(temp_video_path)}")
 
     if is_video(input_path):
         progress(0.95, desc="Merging audio...")
@@ -1547,7 +1550,7 @@ def run_flashvsr_image(
         progress(0.05, desc="Preparing image frames...")
         temp_frames_dir = prepare_image_as_frames(image_path)
         if not temp_frames_dir:
-            return None, None, None
+            return None, None, None, '<div style="padding: 1px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 1px; color: #721c24;">Failed to prepare image frames.</div>'
         
         # Process through the video pipeline
         video_output, save_path, slider_data, _ = run_flashvsr_single(
@@ -1577,28 +1580,34 @@ def run_flashvsr_image(
         
         if not video_output or not os.path.exists(video_output):
             log("Image processing failed", message_type="error")
-            return None, None, None
+            return None, None, None, '<div style="padding: 1px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 1px; color: #721c24;">Image processing failed.</div>'
         
         # Extract middle frame from the output video
         progress(0.95, desc="Extracting upscaled image...")
         log("Extracting middle frame from output...", message_type="info")
         
+        middle_frame = None
         with imageio.get_reader(video_output) as reader:
             num_frames = reader.count_frames()
-            middle_frame_idx = num_frames // 2
-            
-            # Read the middle frame
-            for idx, frame in enumerate(reader):
-                if idx == middle_frame_idx:
-                    middle_frame = frame
-                    break
-        
+            if num_frames and num_frames > 0:
+                middle_frame_idx = num_frames // 2
+
+                # Read the middle frame
+                for idx, frame in enumerate(reader):
+                    if idx == middle_frame_idx:
+                        middle_frame = frame
+                        break
+
+        if middle_frame is None:
+            log("Could not extract frame from output video", message_type="error")
+            return None, None, None, '<div style="padding: 1px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 1px; color: #721c24;">Failed to extract frame from output video.</div>'
+
         # Get original image dimensions to crop padding
         input_img = Image.open(image_path).convert('RGB')
         orig_w, orig_h = input_img.size
         target_w = orig_w * scale
         target_h = orig_h * scale
-        
+
         # Convert frame to PIL and crop padding if present
         output_img = Image.fromarray(middle_frame)
         output_w, output_h = output_img.size
