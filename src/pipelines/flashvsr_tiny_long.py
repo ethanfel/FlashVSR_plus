@@ -387,21 +387,21 @@ class FlashVSRTinyLongPipeline(BasePipeline):
         writer = imageio.get_writer(output_path, fps=fps, quality=quality)
         is_stream = True
 
-        if self.prompt_emb_posi['stats'] == "offload":
-            self.init_cross_kv(context_tensor=self.prompt_emb_posi['context'])
-        self.load_models_to_device(["dit"])
-        self.dit.LQ_proj_in.to(self.device)
-        self.TCDecoder.to(self.device)
-        
-        # 清理可能存在的 LQ_proj_in cache
-        if hasattr(self.dit, "LQ_proj_in"):
-            self.dit.LQ_proj_in.clear_cache()
-
-        frames_total = []
-        LQ_pre_idx = 0
-        LQ_cur_idx = 0
-        self.TCDecoder.clean_mem()
         try:
+            if self.prompt_emb_posi['stats'] == "offload":
+                self.init_cross_kv(context_tensor=self.prompt_emb_posi['context'])
+            self.load_models_to_device(["dit"])
+            self.dit.LQ_proj_in.to(self.device)
+            self.TCDecoder.to(self.device)
+
+            # 清理可能存在的 LQ_proj_in cache
+            if hasattr(self.dit, "LQ_proj_in"):
+                self.dit.LQ_proj_in.clear_cache()
+
+            frames_total = []
+            LQ_pre_idx = 0
+            LQ_cur_idx = 0
+            self.TCDecoder.clean_mem()
             with torch.no_grad():
                 for cur_process_idx in progress_bar_cmd(range(process_total_num)):
                     if cur_process_idx == 0:

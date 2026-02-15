@@ -1586,22 +1586,28 @@ def run_flashvsr_image(
         progress(0.95, desc="Extracting upscaled image...")
         log("Extracting middle frame from output...", message_type="info")
         
+        middle_frame = None
         with imageio.get_reader(video_output) as reader:
             num_frames = reader.count_frames()
-            middle_frame_idx = num_frames // 2
-            
-            # Read the middle frame
-            for idx, frame in enumerate(reader):
-                if idx == middle_frame_idx:
-                    middle_frame = frame
-                    break
-        
+            if num_frames and num_frames > 0:
+                middle_frame_idx = num_frames // 2
+
+                # Read the middle frame
+                for idx, frame in enumerate(reader):
+                    if idx == middle_frame_idx:
+                        middle_frame = frame
+                        break
+
+        if middle_frame is None:
+            log("Could not extract frame from output video", message_type="error")
+            return None, None, None, '<div style="padding: 1px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 1px; color: #721c24;">Failed to extract frame from output video.</div>'
+
         # Get original image dimensions to crop padding
         input_img = Image.open(image_path).convert('RGB')
         orig_w, orig_h = input_img.size
         target_w = orig_w * scale
         target_h = orig_h * scale
-        
+
         # Convert frame to PIL and crop padding if present
         output_img = Image.fromarray(middle_frame)
         output_w, output_h = output_img.size

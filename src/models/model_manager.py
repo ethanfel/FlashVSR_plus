@@ -260,9 +260,9 @@ class ModelDetectorFromPatchedSingleFile:
         loaded_model_names, loaded_models = [], []
         keys_hash_with_shape = hash_state_dict_keys(state_dict, with_shape=True)
         if keys_hash_with_shape in self.keys_hash_with_shape_dict:
-            model_names, model_classes, extra_kwargs = self.keys_hash_with_shape_dict[keys_hash_with_shape]
+            model_name, model_class, extra_kwargs = self.keys_hash_with_shape_dict[keys_hash_with_shape]
             loaded_model_names_, loaded_models_ = load_patch_model_from_single_file(
-                state_dict, model_names, model_classes, extra_kwargs, model_manager, torch_dtype, device)
+                state_dict, [model_name], [model_class], extra_kwargs, model_manager, torch_dtype, device)
             loaded_model_names += loaded_model_names_
             loaded_models += loaded_models_
         return loaded_model_names, loaded_models
