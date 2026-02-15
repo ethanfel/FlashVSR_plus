@@ -305,6 +305,56 @@ def save_image_sequence(frames, save_dir, fmt="png"):
         Image.fromarray(frame_np).save(os.path.join(save_dir, f"{i:06d}.{fmt}"))
     return save_dir
 
+def resolve_imgseq_folder(zip_path, folder_path):
+    """Resolve image sequence input to a folder path. Returns (folder, error_msg)."""
+    if zip_path:
+        if zip_path.lower().endswith('.zip') and os.path.isfile(zip_path):
+            return extract_zip_to_temp(zip_path), None
+        return None, "Uploaded file is not a valid .zip"
+    if folder_path and folder_path.strip():
+        p = folder_path.strip()
+        if os.path.isdir(p):
+            return p, None
+        return None, f"Folder not found: {p}"
+    return None, None
+
+def analyze_imgseq_folder(folder):
+    """Return (info_html, frame_count) for an image sequence folder."""
+    if not folder or not os.path.isdir(folder):
+        return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center; font-size: 0.9em;">Upload .zip or set folder path to see frame info</div>', 0
+    images = list_images_natural(folder)
+    count = len(images)
+    if count == 0:
+        return '<div style="padding: 8px; background: #fff3cd; border: 1px solid #ffc107; border-radius: 6px; color: #856404; text-align: center; font-size: 0.9em;">No supported images found in folder</div>', 0
+    with Image.open(images[0]) as img:
+        w, h = img.size
+    exts = set(os.path.splitext(f)[1].lower() for f in images)
+    html = (
+        f'<div style="padding: 8px; background: #d4edda; border: 1px solid #c3e6cb; border-radius: 6px; color: #155724; font-size: 0.9em;">'
+        f'<b>{count}</b> frames &mdash; {w}&times;{h} &mdash; {", ".join(sorted(exts))}</div>'
+    )
+    return html, count
+
+def trim_imgseq_to_temp(folder, frame_start, frame_end):
+    """Create a temp folder with symlinks to a subset of frames. Returns the trimmed folder path."""
+    images = list_images_natural(folder)
+    total = len(images)
+    start = max(0, int(frame_start))
+    end = int(frame_end) if frame_end and int(frame_end) > 0 else total
+    end = min(end, total)
+    if start >= end:
+        raise gr.Error(f"Invalid frame range: start={start} >= end={end} (total {total} frames)")
+    if start == 0 and end == total:
+        return folder  # No trimming needed
+    trimmed_dir = os.path.join(TEMP_DIR, f"trimmed_{uuid.uuid4().hex[:12]}")
+    os.makedirs(trimmed_dir, exist_ok=True)
+    selected = images[start:end]
+    for i, src in enumerate(selected):
+        ext = os.path.splitext(src)[1]
+        dst = os.path.join(trimmed_dir, f"{i:06d}{ext}")
+        os.symlink(os.path.abspath(src), dst)
+    return trimmed_dir
+
 def extract_zip_to_temp(zip_path: str) -> str:
     """Extract a zip file containing an image sequence to a temp directory. Returns the directory path."""
     extract_dir = os.path.join(TEMP_DIR, f"imgseq_{uuid.uuid4().hex[:12]}")
@@ -2771,7 +2821,7 @@ def create_ui():
                                     file_count="single",
                                     type="filepath",
                                     file_types=[".zip"],
-                                    height="320px",
+                                    height="240px",
                                 )
                                 gr.Markdown("**Or** specify a folder path containing images:")
                                 imgseq_folder_path = gr.Textbox(
@@ -2779,6 +2829,19 @@ def create_ui():
                                     label="Folder Path",
                                     show_label=False
                                 )
+                                imgseq_info_html = gr.HTML(
+                                    value='<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center; font-size: 0.9em;">Upload .zip or set folder path to see frame info</div>'
+                                )
+                                with gr.Accordion("✂️ Trim Frame Range", open=False):
+                                    with gr.Row():
+                                        imgseq_frame_start = gr.Number(
+                                            value=0, label="Start Frame", precision=0, minimum=0,
+                                            info="0-indexed first frame to include"
+                                        )
+                                        imgseq_frame_end = gr.Number(
+                                            value=0, label="End Frame", precision=0, minimum=0,
+                                            info="0 = use all frames"
+                                        )
                                 imgseq_run_button = gr.Button("Start Processing", variant="primary", size="sm")
 
                         # Video Pre-Processing Accordion
@@ -3720,19 +3783,19 @@ def create_ui():
                 )
 
         def handle_imgseq_processing(
-            zip_path, folder_path, mode, model_version, scale, color_fix, tiled_vae,
+            zip_path, folder_path, frame_start, frame_end,
+            mode, model_version, scale, color_fix, tiled_vae,
             tiled_dit, tile_size, tile_overlap, unload_dit, dtype_str, seed, device,
             fps_override, quality, attention_mode, sparse_ratio, kv_ratio, local_range, autosave, create_comparison,
             output_format
         ):
-            # Resolve input: prefer uploaded zip, fall back to folder path
-            input_path = None
-            if zip_path:
-                input_path = zip_path
-            elif folder_path and folder_path.strip():
-                input_path = folder_path.strip()
-            if not input_path:
+            folder, err = resolve_imgseq_folder(zip_path, folder_path)
+            if err:
+                raise gr.Error(err)
+            if not folder:
                 raise gr.Error("Please upload a .zip file or specify a folder path.")
+            # Apply frame range trim
+            input_path = trim_imgseq_to_temp(folder, frame_start, frame_end)
             return run_flashvsr_single(
                 input_path, mode, model_version, scale, color_fix, tiled_vae, tiled_dit, tile_size,
                 tile_overlap, unload_dit, dtype_str, seed, device, fps_override, quality,
@@ -3806,7 +3869,7 @@ def create_ui():
         ).then(
             fn=handle_imgseq_processing,
             inputs=[
-                imgseq_input, imgseq_folder_path,
+                imgseq_input, imgseq_folder_path, imgseq_frame_start, imgseq_frame_end,
                 mode_radio, model_version_radio, scale_slider, color_fix_checkbox, tiled_vae_checkbox,
                 tiled_dit_checkbox, tile_size_slider, tile_overlap_slider, unload_dit_checkbox,
                 dtype_radio, seed_number, device_textbox, fps_number, quality_slider, attention_mode_radio,
@@ -3833,6 +3896,33 @@ def create_ui():
             inputs=None,
             outputs=[save_status],
             show_progress="hidden"
+        )
+
+        # Image sequence info update
+        def update_imgseq_info_from_zip(zip_path):
+            if not zip_path:
+                return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center; font-size: 0.9em;">Upload .zip or set folder path to see frame info</div>'
+            folder, err = resolve_imgseq_folder(zip_path, None)
+            if err or not folder:
+                return f'<div style="padding: 8px; background: #f8d7da; border: 1px solid #f5c6cb; border-radius: 6px; color: #721c24; font-size: 0.9em;">{err or "Invalid input"}</div>'
+            html, _ = analyze_imgseq_folder(folder)
+            return html
+
+        def update_imgseq_info_from_folder(folder_path):
+            if not folder_path or not folder_path.strip():
+                return '<div style="padding: 8px; background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 6px; color: #6c757d; text-align: center; font-size: 0.9em;">Upload .zip or set folder path to see frame info</div>'
+            html, _ = analyze_imgseq_folder(folder_path.strip())
+            return html
+
+        imgseq_input.change(
+            fn=update_imgseq_info_from_zip,
+            inputs=[imgseq_input],
+            outputs=[imgseq_info_html]
+        )
+        imgseq_folder_path.change(
+            fn=update_imgseq_info_from_folder,
+            inputs=[imgseq_folder_path],
+            outputs=[imgseq_info_html]
         )
 
         # Toggle chunk settings visibility and update preview
