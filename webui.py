@@ -543,9 +543,8 @@ def stitch_video_tiles(
                 for i, reader in enumerate(readers):
                     try:
                         tile_chunk_frames = [
-                            frame.astype(np.float32) / 255.0
-                            for idx, frame in enumerate(reader.iter_data())
-                            if start_frame <= idx < end_frame
+                            reader.get_data(idx).astype(np.float32) / 255.0
+                            for idx in range(start_frame, end_frame)
                         ]
                         tile_chunk_np = np.stack(tile_chunk_frames, axis=0)
                     except Exception as e:
@@ -877,7 +876,7 @@ def run_flashvsr_single(
                 pipe(
                     LQ_video=LQ_tile, num_frames=F, height=th, width=tw,
                     topk_ratio=sparse_ratio*768*1280/(th*tw),
-                    quality=10, output_path=temp_name, **pipe_kwargs
+                    quality=quality, output_path=temp_name, **pipe_kwargs
                 )
                 temp_videos.append(temp_name); del LQ_tile, input_tile; clean_vram()
 
@@ -1020,13 +1019,14 @@ def run_flashvsr_single(
             del video  # Free the original video tensor
         del pipe; clean_vram()
 
+    # Free input frames early to reduce RAM during post-processing
+    del frames
+    clean_vram()
+    torch.cuda.empty_cache()
+    import gc
+    gc.collect()
+
     if final_output_tensor is not None:
-        # Aggressive cleanup before saving to minimize RAM usage
-        del frames  # Free input frames
-        clean_vram()
-        torch.cuda.empty_cache()
-        import gc
-        gc.collect()
 
         if save_as_imgseq:
             progress(0.9, desc="Saving image sequence...")
@@ -1580,7 +1580,7 @@ def run_flashvsr_image(
         
         if not video_output or not os.path.exists(video_output):
             log("Image processing failed", message_type="error")
-            return None, None, None
+            return None, None, None, '<div style="padding: 1px; background-color: #f8d7da; border: 1px solid #f5c6cb; border-radius: 1px; color: #721c24;">Image processing failed.</div>'
         
         # Extract middle frame from the output video
         progress(0.95, desc="Extracting upscaled image...")

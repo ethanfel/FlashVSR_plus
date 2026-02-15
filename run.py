@@ -5,7 +5,7 @@ import sys
 import argparse
 
 parser = argparse.ArgumentParser(description="FlashVSR+: Towards Real-Time Diffusion-Based Streaming Video Super-Resolution.")
-parser.add_argument("-i", "--input", type=str, help="Path to video file, folder of images, or .zip of images")
+parser.add_argument("-i", "--input", type=str, required=True, help="Path to video file, folder of images, or .zip of images")
 parser.add_argument("-s", "--scale", type=int, default=4, help="Upscale factor, default=4")
 parser.add_argument("-m", "--mode", type=str, default="tiny", choices=["tiny", "tiny-long", "full"], help="The type of pipeline to use, default=tiny")
 parser.add_argument("--tiled-vae", action="store_true", help="Enable tile decoding")
@@ -425,13 +425,10 @@ def stitch_video_tiles(
                     # 5. 一次性读取这个 tile 在当前 chunk 中的所有帧
                     # 这是利用顺序读取的关键优化
                     try:
-                        # get_reader().iter_data() 是高效读取连续帧的方式
                         tile_chunk_frames = [
-                            frame.astype(np.float32) / 255.0 
-                            for idx, frame in enumerate(reader.iter_data()) 
-                            if start_frame <= idx < end_frame
+                            reader.get_data(idx).astype(np.float32) / 255.0
+                            for idx in range(start_frame, end_frame)
                         ]
-                        # 将帧列表转换为一个 NumPy 数组
                         tile_chunk_np = np.stack(tile_chunk_frames, axis=0)
                     except Exception as e:
                         log(f"Warning: Could not read chunk from tile {i}. Error: {e}", message_type='warning')
@@ -574,26 +571,27 @@ def main(input, mode, scale, color_fix, tiled_vae, tiled_dit, tile_size, tile_ov
             input_tile = frames[:, y1:y2, x1:x2, :]
                 
             if mode == "tiny-long":
-                temp_name = os.path.join(local_temp, f"{i+1:05d}.mp4") 
+                temp_name = os.path.join(local_temp, f"{i+1:05d}.mp4")
                 th, tw, F = get_input_params(input_tile, scale=scale)
                 LQ_tile = input_tensor_generator(input_tile, _device, scale=scale, dtype=dtype)
             else:
+                temp_name = None
                 LQ_tile, th, tw, F = prepare_input_tensor(input_tile, _device, scale=scale, dtype=dtype)
                 LQ_tile = LQ_tile.to(_device)
-            
+
             if i == 0:
                 log(f"[FlashVSR] Processing {frames.shape[0]} frames...", message_type='info')
             log(f"[FlashVSR] Processing tile {i+1}/{len(tile_coords)}: ({x1},{y1}) to ({x2},{y2})", message_type='info')
-            
+
             output_tile_gpu = pipe(
                 prompt="", negative_prompt="", cfg_scale=1.0, num_inference_steps=1, seed=seed, tiled=tiled_vae,
                 LQ_video=LQ_tile, num_frames=F, height=th, width=tw, is_full_block=False, if_buffer=True,
                 topk_ratio=sparse_ratio*768*1280/(th*tw), kv_ratio=kv_ratio, local_range=local_range,
-                color_fix=color_fix, unload_dit=unload_dit, fps=_fps, quality=10, output_path=temp_name, tiled_dit=True
+                color_fix=color_fix, unload_dit=unload_dit, fps=_fps, quality=quality, output_path=temp_name, tiled_dit=True
             )
-            
-            temp_videos.append(temp_name)
+
             if mode == "tiny-long":
+                temp_videos.append(temp_name)
                 final_output = output_tile_gpu
                 del LQ_tile, input_tile
                 clean_vram()
@@ -652,7 +650,7 @@ def main(input, mode, scale, color_fix, tiled_vae, tiled_dit, tile_size, tile_ov
         del pipe, video, LQ
         clean_vram()
     
-    return final_output, fps
+    return final_output, _fps
 
 if __name__ == "__main__":
     dtype_map = {

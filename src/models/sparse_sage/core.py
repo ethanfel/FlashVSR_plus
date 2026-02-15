@@ -92,7 +92,14 @@ def sparse_sageattn(q, k, v, mask_id = None, is_causal=False, tensor_layout="HND
         return _sdpa_fallback(q, k, v, mask_id=mask_id, is_causal=is_causal, tensor_layout=tensor_layout)
 
     if mask_id is None:
-        mask_id = torch.ones((q.shape[0], q.shape[1], (q.shape[2] + 128 - 1)//128, (q.shape[3] + 64 - 1)//64), dtype=torch.int8, device=q.device) # TODO
+        if tensor_layout == "HND":
+            num_q_blocks = (q.shape[2] + 128 - 1) // 128
+            num_kv_blocks = (k.shape[2] + 64 - 1) // 64
+        else:  # NHD
+            num_q_blocks = (q.shape[1] + 128 - 1) // 128
+            num_kv_blocks = (k.shape[1] + 64 - 1) // 64
+        mask_id = torch.ones((q.shape[0], q.shape[1] if tensor_layout == "HND" else q.shape[2],
+                              num_q_blocks, num_kv_blocks), dtype=torch.int8, device=q.device)
 
     output_dtype = q.dtype
     # The Triton kernel internally computes in fp16; convert v for the kernel
