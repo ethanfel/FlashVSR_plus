@@ -35,6 +35,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility,video
 ENV GRADIO_SERVER_NAME=0.0.0.0
+# Allow uv to install into the system Python (PEP 668 override for containers)
+ENV UV_SYSTEM_PYTHON=1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     python${PYTHON_VERSION} python${PYTHON_VERSION}-dev python${PYTHON_VERSION}-venv \
@@ -50,13 +52,13 @@ RUN ln -sf /usr/bin/python${PYTHON_VERSION} /usr/bin/python3 && \
 WORKDIR /app
 
 # Install latest PyTorch nightly with CUDA 12.8 (sm_120 / Blackwell support)
-RUN uv pip install --system --no-cache --pre \
+RUN uv pip install --no-cache --pre \
     torch torchvision torchaudio \
     --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Install remaining Python dependencies
 COPY requirements.txt .
-RUN uv pip install --system --no-cache -r requirements.txt
+RUN uv pip install --no-cache -r requirements.txt
 
 # Copy application code
 COPY . .
