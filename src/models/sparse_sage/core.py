@@ -47,12 +47,59 @@ def _expand_block_mask(mask_id, N_q, N_kv, BLOCK_M=128, BLOCK_N=64):
     return expanded
 
 
+def _chunked_sparse_sdpa(q, k, v, mask_id, BLOCK_M=128, BLOCK_N=64):
+    """Chunked block-sparse SDPA that processes Q in blocks to avoid O(N^2) memory.
+
+    Instead of expanding the full (N_q x N_kv) mask, this processes BLOCK_M rows
+    of Q at a time, expanding only the current row of the block mask. Peak memory
+    is O(BLOCK_M x N_kv) instead of O(N_q x N_kv).
+
+    Args:
+        q: (B, H, N_q, D) query tensor.
+        k: (B, H, N_kv, D) key tensor.
+        v: (B, H, N_kv, D) value tensor.
+        mask_id: (B, H, num_q_blocks, num_kv_blocks) int8 block mask.
+        BLOCK_M: query block size (must match mask generation).
+        BLOCK_N: key/value block size (must match mask generation).
+
+    Returns:
+        (B, H, N_q, D) attention output.
+    """
+    B, H, N_q, D = q.shape
+    N_kv = k.shape[2]
+    num_q_blocks = mask_id.shape[2]
+
+    output = torch.zeros(B, H, N_q, D, dtype=q.dtype, device=q.device)
+
+    for qi in range(num_q_blocks):
+        q_start = qi * BLOCK_M
+        q_end = min(q_start + BLOCK_M, N_q)
+        q_chunk = q[:, :, q_start:q_end, :]
+
+        # Expand only this Q block's row of the mask: (B, H, 1, num_kv_blocks)
+        # -> (B, H, chunk_len, N_kv)
+        row_mask = mask_id[:, :, qi:qi+1, :].bool()
+        row_mask = row_mask.repeat_interleave(BLOCK_N, dim=3)[:, :, :, :N_kv]
+        row_mask = row_mask.expand(-1, -1, q_end - q_start, -1)
+
+        output[:, :, q_start:q_end, :] = torch.nn.functional.scaled_dot_product_attention(
+            q_chunk, k, v, attn_mask=row_mask
+        )
+
+    return output
+
+
+# Threshold: if the full expanded mask would exceed this many elements,
+# use chunked attention instead. 2^30 ≈ 1 billion elements ≈ 1 GiB for bool.
+_CHUNKED_THRESHOLD = 1 << 30
+
+
 def _sdpa_fallback(q, k, v, mask_id=None, is_causal=False, tensor_layout="HND"):
     """Fallback using PyTorch's native scaled_dot_product_attention.
 
-    When mask_id is provided the block-level sparse mask is expanded to a
-    full boolean attention mask so that SDPA respects the same sparsity
-    pattern as the Triton kernel, preserving output quality.
+    When mask_id is provided, the block-level sparse mask is respected.
+    For small sequences the mask is expanded to a full boolean mask.
+    For large sequences, chunked attention is used to avoid O(N^2) memory.
     """
     output_dtype = q.dtype
     if tensor_layout == "HND":
@@ -68,15 +115,24 @@ def _sdpa_fallback(q, k, v, mask_id=None, is_causal=False, tensor_layout="HND"):
     k_fp = k.to(q_fp.dtype)
     v_fp = v.to(q_fp.dtype)
 
-    attn_mask = None
-    if mask_id is not None:
+    if mask_id is None:
+        o = torch.nn.functional.scaled_dot_product_attention(
+            q_fp, k_fp, v_fp, is_causal=is_causal
+        )
+    else:
         N_q = q_fp.shape[2]
         N_kv = k_fp.shape[2]
-        attn_mask = _expand_block_mask(mask_id, N_q, N_kv)
+        mask_numel = q_fp.shape[0] * q_fp.shape[1] * N_q * N_kv
 
-    o = torch.nn.functional.scaled_dot_product_attention(
-        q_fp, k_fp, v_fp, attn_mask=attn_mask, is_causal=is_causal
-    )
+        if mask_numel <= _CHUNKED_THRESHOLD:
+            # Small enough to expand the full mask
+            attn_mask = _expand_block_mask(mask_id, N_q, N_kv)
+            o = torch.nn.functional.scaled_dot_product_attention(
+                q_fp, k_fp, v_fp, attn_mask=attn_mask, is_causal=is_causal
+            )
+        else:
+            # Large sequence: use chunked attention to avoid OOM
+            o = _chunked_sparse_sdpa(q_fp, k_fp, v_fp, mask_id)
 
     if tensor_layout == "NHD":
         o = o.transpose(1, 2)
