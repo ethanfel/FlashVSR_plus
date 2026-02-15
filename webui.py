@@ -715,7 +715,8 @@ def init_pipeline(mode, device, dtype, model_version="v1.0"):
         proj_class = Buffer_LQ4x_Proj  # v1.0 uses original buffer projection
         log(f"Initializing FlashVSR v1.0 ({mode} mode)", message_type='info')
     
-    ckpt_path, vae_path, lq_path, tcd_path, prompt_path = [os.path.join(model_path, f) for f in ["diffusion_pytorch_model_streaming_dmd.safetensors", "Wan2.1_VAE.pth", "LQ_proj_in.ckpt", "TCDecoder.ckpt", "../posi_prompt.pth"]]
+    ckpt_path, vae_path, lq_path, tcd_path = [os.path.join(model_path, f) for f in ["diffusion_pytorch_model_streaming_dmd.safetensors", "Wan2.1_VAE.pth", "LQ_proj_in.ckpt", "TCDecoder.ckpt"]]
+    prompt_path = os.path.join(ROOT_DIR, "models", "posi_prompt.pth")
     mm = ModelManager(torch_dtype=dtype, device="cpu")
     if mode == "full":
         mm.load_models([ckpt_path, vae_path]); pipe = FlashVSRFullPipeline.from_model_manager(mm, device=device)
