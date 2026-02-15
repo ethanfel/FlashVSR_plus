@@ -31,7 +31,7 @@ ARG PYTHON_VERSION=3.12
 # ============================================================================
 # Stage 1: build SageAttention from source (needs CUDA compiler)
 # ============================================================================
-FROM nvidia/cuda:12.8.1-devel-ubuntu22.04 AS builder
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS builder
 
 ARG TORCH_NIGHTLY_VERSION
 ARG TORCHVISION_NIGHTLY_VERSION
@@ -66,7 +66,7 @@ RUN pip install --no-cache-dir --break-system-packages ninja setuptools wheel &&
 # ============================================================================
 # Stage 2: runtime image (smaller, no compiler toolchain)
 # ============================================================================
-FROM nvidia/cuda:12.8.1-runtime-ubuntu22.04
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
 
 ARG TORCH_NIGHTLY_VERSION
 ARG TORCHVISION_NIGHTLY_VERSION
