@@ -20,6 +20,7 @@ parser.add_argument("-d", "--device", type=str, default="auto", help="Device to 
 parser.add_argument("-f", "--fps", type=int, default=30, help="Output FPS (for image sequences only), default=30")
 parser.add_argument("-q", "--quality", type=int, default=6, help="Output video quality, default=6")
 parser.add_argument("-a", "--attention", default="sage", choices=["sage", "block"], help="Attention mode, default=sage")
+parser.add_argument("--output-format", default="mp4", choices=["mp4", "png"], help="Output as mp4 video or png image sequence, default=mp4")
 parser.add_argument("output_folder", type=str, help="Path to save output video")
 args = parser.parse_args()
 
@@ -116,6 +117,14 @@ def save_video(frames, save_path, fps=30, quality=5):
     for frame_np in tqdm(frames_np, desc=f"[FlashVSR] Saving video"):
         w.append_data(frame_np)
     w.close()
+
+def save_image_sequence(frames, save_dir, fmt="png"):
+    """Save a tensor of frames (N, H, W, C) as numbered images in save_dir."""
+    os.makedirs(save_dir, exist_ok=True)
+    for i in tqdm(range(frames.shape[0]), desc="[FlashVSR] Saving image sequence..."):
+        frame_np = (frames[i].cpu().float() * 255.0).clip(0, 255).numpy().astype(np.uint8)
+        Image.fromarray(frame_np).save(os.path.join(save_dir, f"{i:06d}.{fmt}"))
+    return save_dir
 
 def merge_video_with_audio(video_path, audio_source_path):
     temp = video_path+"temp.mp4"
@@ -666,11 +675,22 @@ if __name__ == "__main__":
         shutil.rmtree(temp)
     os.makedirs(temp, exist_ok=True)
     name = os.path.basename(args.input.rstrip('/'))
-    final = os.path.join(args.output_folder, f"FlashVSR_{args.mode}_{name.split('.')[0]}_{args.seed}.mp4")
-    result, fps = main(args.input, args.mode, args.scale, args.color_fix, args.tiled_vae, args.tiled_dit,args.tile_size,
-        args.overlap, args.unload_dit, dtype, seed=args.seed, device=args.device, quality=args.quality, output=final)
-    if args.mode != "tiny-long":
-        save_video(result, final, fps=fps, quality=args.quality)
-        
-    merge_video_with_audio(final, args.input)
+    if args.output_format == "png":
+        final_dir = os.path.join(args.output_folder, f"FlashVSR_{args.mode}_{name.split('.')[0]}_{args.seed}")
+        final = os.path.join(args.output_folder, f"FlashVSR_{args.mode}_{name.split('.')[0]}_{args.seed}.mp4")
+        result, fps = main(args.input, args.mode, args.scale, args.color_fix, args.tiled_vae, args.tiled_dit, args.tile_size,
+            args.overlap, args.unload_dit, dtype, seed=args.seed, device=args.device, quality=args.quality, output=final)
+        if args.mode != "tiny-long":
+            save_image_sequence(result, final_dir)
+            log(f"[FlashVSR] Image sequence saved to: {final_dir}", message_type='finish')
+        else:
+            log("[FlashVSR] Image sequence output is not supported with tiny-long mode (streaming pipeline). Output saved as video.", message_type='warning')
+            merge_video_with_audio(final, args.input)
+    else:
+        final = os.path.join(args.output_folder, f"FlashVSR_{args.mode}_{name.split('.')[0]}_{args.seed}.mp4")
+        result, fps = main(args.input, args.mode, args.scale, args.color_fix, args.tiled_vae, args.tiled_dit, args.tile_size,
+            args.overlap, args.unload_dit, dtype, seed=args.seed, device=args.device, quality=args.quality, output=final)
+        if args.mode != "tiny-long":
+            save_video(result, final, fps=fps, quality=args.quality)
+        merge_video_with_audio(final, args.input)
     log("[FlashVSR] Done.", message_type='finish')
