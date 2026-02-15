@@ -57,11 +57,12 @@ RUN pip install --no-cache-dir --break-system-packages --pre \
     --index-url https://download.pytorch.org/whl/nightly/cu128
 
 # Build SageAttention from source with sm_120 support
-RUN pip install --no-cache-dir --break-system-packages ninja setuptools wheel && \
+# --no-build-isolation: use the already-installed PyTorch (needed for CUDA extensions)
+RUN pip install --no-cache-dir --break-system-packages ninja setuptools wheel packaging && \
     git clone https://github.com/thu-ml/SageAttention.git /tmp/sageattention && \
     cd /tmp/sageattention && \
-    python setup.py bdist_wheel && \
-    cp dist/*.whl /tmp/sageattention.whl
+    pip wheel --no-build-isolation --no-deps --wheel-dir /tmp . && \
+    cp /tmp/sageattention-*.whl /tmp/sageattention.whl
 
 # ============================================================================
 # Stage 2: runtime image (smaller, no compiler toolchain)
