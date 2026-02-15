@@ -106,18 +106,34 @@ Input Video/Image
 ## Development Setup
 
 ### Prerequisites
-- Python 3.10+
+- Python 3.10+ (3.12+ required for Blackwell GPUs)
 - FFmpeg on PATH
 - CUDA-capable GPU (consumer-grade supported via memory optimizations)
-- PyTorch 2.7.0+ with CUDA 12.1+ support
 
-### Install
+### PyTorch Installation (GPU-dependent)
+
+**Ampere / Ada Lovelace (RTX 30xx, 40xx):**
 ```bash
+pip install torch==2.7.0 torchvision==0.22.0 torchaudio==2.7.0 --index-url https://download.pytorch.org/whl/cu124
+pip install sageattention
 pip install -r requirements.txt
 ```
+
+**Blackwell (RTX 50xx, RTX 6000 Pro) — sm_120:**
+No stable PyTorch release supports sm_120 yet. You must use nightly + CUDA 12.8:
+```bash
+pip install --pre torch torchvision torchaudio --index-url https://download.pytorch.org/whl/nightly/cu128
+# SageAttention must be built from source for Blackwell:
+pip install ninja setuptools wheel
+git clone https://github.com/thu-ml/SageAttention.git && cd SageAttention
+TORCH_CUDA_ARCH_LIST="12.0" python setup.py install
+cd .. && pip install -r requirements.txt
+```
+
 Models are auto-downloaded from HuggingFace on first run to `models/FlashVSR/`.
 
-### Docker
+### Docker (Blackwell-ready)
+The Dockerfile uses a multi-stage build with CUDA 12.8 + PyTorch nightly + SageAttention compiled from source:
 ```bash
 docker build -t flashvsr-plus .
 docker run --gpus all -p 7860:7860 -v flashvsr-models:/app/models flashvsr-plus
@@ -130,12 +146,12 @@ Copy `.env.example` to `.env` for S3/MinIO storage configuration (only needed fo
 
 | Package | Version | Purpose |
 |---------|---------|---------|
-| torch | 2.7.0 | Core ML framework |
+| torch | nightly cu128 (Blackwell) or 2.7.0 (older GPUs) | Core ML framework |
 | gradio | >=5.49.0,<6.0.0 | Web UI |
 | fastapi | 0.128.0 | REST API |
 | einops | ~0.8.0 | Tensor reshaping |
 | safetensors | ~0.6.0 | Model weight format |
-| sageattention | latest | Sparse attention backend |
+| sageattention | built from source (Blackwell) or pip (older) | Sparse attention backend |
 | huggingface_hub | >=1.0.0,<2.0.0 | Model downloads |
 | imageio / ffmpeg-python | — | Video I/O |
 
@@ -159,6 +175,8 @@ Copy `.env.example` to `.env` for S3/MinIO storage configuration (only needed fo
 ### Sparse Attention
 - `src/models/sparse_sage/` implements INT8 quantized sparse attention via Triton kernels
 - Replaces the original Block-Sparse-Attention from the parent project
+- `core.py` includes automatic fallback to PyTorch SDPA if Triton kernels fail (e.g. on Blackwell when ptxas doesn't recognize sm_120)
+- `sparse_int8_attn.py` auto-selects Triton `num_stages` based on GPU compute capability
 
 ### Configuration
 - `global_config.py` aggregates all Pydantic config models from `configs/`
@@ -189,8 +207,9 @@ No automated test suite exists. Testing is manual:
 3. **Three pipelines** — `tiny` (fast), `tiny-long` (streaming for long videos), `full` (highest quality). Keep them in sync where appropriate
 4. **webui.py is the hub** — The API (`api.py`) imports processing functions directly from `webui.py`, making it a core dependency for both UI and API modes
 5. **Large files** — `webui.py` is ~4,400 lines. Read specific sections rather than the whole file when possible
-6. **Torch 2.7.0 pinned** — Do not upgrade torch without considering sageattention and flash attention compatibility
-7. **FFmpeg required** — Video I/O depends on FFmpeg on PATH. GPU-accelerated encoding attempted first with CPU fallback
-8. **No linting/type checking** — No mypy, ruff, or flake8 configuration. Follow existing code style
-9. **Model downloads** — Models auto-download from HuggingFace. `models/FlashVSR/` is not committed to git
-10. **GPU compatibility** — Tested with NVIDIA Ampere, Ada Lovelace, and Blackwell architectures. Sparse SageAttention Triton kernels auto-tune per architecture
+6. **PyTorch version is GPU-dependent** — Blackwell (sm_120) requires PyTorch nightly + cu128. Older GPUs can use stable 2.7.0. Do not pin a single torch version in requirements.txt
+7. **SageAttention on Blackwell** — Must be built from source with `TORCH_CUDA_ARCH_LIST="12.0"`. The pip package does not include sm_120 kernels. If the Triton kernel fails at runtime, `sparse_sage/core.py` automatically falls back to PyTorch SDPA
+8. **FFmpeg required** — Video I/O depends on FFmpeg on PATH. GPU-accelerated encoding attempted first with CPU fallback
+9. **No linting/type checking** — No mypy, ruff, or flake8 configuration. Follow existing code style
+10. **Model downloads** — Models auto-download from HuggingFace. `models/FlashVSR/` is not committed to git
+11. **GPU compatibility** — Tested with NVIDIA Ampere, Ada Lovelace, and Blackwell architectures. Sparse SageAttention Triton kernels auto-tune per architecture with SDPA fallback
